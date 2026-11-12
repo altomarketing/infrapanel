@@ -17,6 +17,7 @@ import {
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { lookupReverseDns } from '../lib/dns'
 import type { IPAddress, Network, Server as ServerRecord } from '../types'
 
 type IpFormState = {
@@ -75,6 +76,17 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
   const [editingIp, setEditingIp] = useState<IPAddress | null>(null)
   const [ipForm, setIpForm] = useState<IpFormState>(emptyIpForm)
   const [savingIp, setSavingIp] = useState(false)
+  const [resolvingRdns, setResolvingRdns] = useState(false)
+
+  async function handleAutoResolveRdns(ipInput: string) {
+    if (!ipInput.trim() || ipForm.purpose.trim()) return
+    setResolvingRdns(true)
+    const host = await lookupReverseDns(ipInput)
+    if (host) {
+      setIpForm(old => ({ ...old, purpose: host }))
+    }
+    setResolvingRdns(false)
+  }
 
   // Network Modal
   const [netModalOpen, setNetModalOpen] = useState(false)
@@ -187,12 +199,18 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     setSavingIp(true)
     setError('')
 
+    let purpose = ipForm.purpose.trim()
+    if (!purpose && ipForm.address.trim()) {
+      const autoHost = await lookupReverseDns(ipForm.address.trim())
+      if (autoHost) purpose = autoHost
+    }
+
     const payload: Record<string, unknown> = {
       workspace_id: workspaceId,
       address: ipForm.address.trim(),
       server_id: ipForm.server_id || null,
       ip_type: ipForm.ip_type,
-      purpose: ipForm.purpose.trim() || null,
+      purpose: purpose || null,
       label: ipForm.label.trim() || null,
       notes: ipForm.notes.trim() || null
     }
@@ -705,7 +723,8 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                   className="input"
                   value={ipForm.address}
                   onChange={e => setIpForm(old => ({ ...old, address: e.target.value }))}
-                  placeholder="Ej. 198.51.100.5 o 2001:db8::1"
+                  onBlur={() => handleAutoResolveRdns(ipForm.address)}
+                  placeholder="Ej. 198.50.231.236"
                   required
                   autoFocus
                 />
@@ -740,12 +759,22 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
               </div>
 
               <div className="form-field">
-                <label>Reverse DNS (PTR)</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label>Reverse DNS (PTR)</label>
+                  <button
+                    type="button"
+                    style={{ border: 0, background: 'none', color: '#2563eb', fontSize: '9px', cursor: 'pointer', padding: 0 }}
+                    onClick={() => handleAutoResolveRdns(ipForm.address)}
+                    disabled={resolvingRdns}
+                  >
+                    {resolvingRdns ? 'Consultando DNS…' : '🔍 Resolver PTR'}
+                  </button>
+                </div>
                 <input
                   className="input"
                   value={ipForm.purpose}
                   onChange={e => setIpForm(old => ({ ...old, purpose: e.target.value }))}
-                  placeholder="server01.midominio.com"
+                  placeholder={resolvingRdns ? 'Buscando PTR automáticamente…' : 'server01.midominio.com'}
                 />
               </div>
 

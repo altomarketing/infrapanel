@@ -19,6 +19,7 @@ import {
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { lookupReverseDns } from '../lib/dns'
 import type { IPAddress, Provider, Server as ServerRecord, ServerStatus, ServerType } from '../types'
 
 type FormState = {
@@ -345,13 +346,19 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     setSavingIp(true)
     setError('')
 
+    let rdns = newIpRdns.trim()
+    if (!rdns && newIpAddress.trim()) {
+      const autoHost = await lookupReverseDns(newIpAddress.trim())
+      if (autoHost) rdns = autoHost
+    }
+
     const ipPayload: Record<string, unknown> = {
       workspace_id: workspaceId,
       server_id: detailServer.id,
       address: newIpAddress.trim(),
       ip_type: newIpType,
       label: newIpLabel.trim() || null,
-      purpose: newIpRdns.trim() || null
+      purpose: rdns || null
     }
 
     if (newIpCost.trim()) {
@@ -743,9 +750,15 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                       <label>Dirección IP o Bloque *</label>
                       <input
                         className="input"
-                        placeholder="Ej. 198.51.100.5"
+                        placeholder="Ej. 198.50.231.236"
                         value={newIpAddress}
                         onChange={e => setNewIpAddress(e.target.value)}
+                        onBlur={async () => {
+                          if (!newIpRdns.trim() && newIpAddress.trim()) {
+                            const h = await lookupReverseDns(newIpAddress)
+                            if (h) setNewIpRdns(h)
+                          }
+                        }}
                         required
                         autoFocus
                       />

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  Boxes,
   Edit2,
   ExternalLink,
   Eye,
@@ -40,6 +41,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [roleFilter, setRoleFilter] = useState<'all' | 'hosts' | 'vps'>('all')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -52,7 +54,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     const [serverResult, ipCountResult] = await Promise.all([
       supabase!
         .from('servers')
-        .select('*, providers:provider_id(id,name)')
+        .select('*, providers:provider_id(id,name), parent_server:parent_id(id,name)')
         .eq('workspace_id', workspaceId)
         .order('name'),
       supabase!
@@ -63,7 +65,17 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     ])
 
     if (serverResult.error) {
-      setError(serverResult.error.message)
+      // Fallback if parent_server join fails
+      const fallback = await supabase!
+        .from('servers')
+        .select('*, providers:provider_id(id,name)')
+        .eq('workspace_id', workspaceId)
+        .order('name')
+      if (fallback.data) {
+        setServers(fallback.data as ServerRecord[])
+      } else {
+        setError(serverResult.error.message)
+      }
     } else {
       setServers((serverResult.data || []) as ServerRecord[])
     }
@@ -96,27 +108,50 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     }
   }
 
+  // Count child VMs for each parent server
+  const vmCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const s of servers) {
+      if (s.parent_id) {
+        counts[s.parent_id] = (counts[s.parent_id] || 0) + 1
+      }
+    }
+    return counts
+  }, [servers])
+
   const filtered = useMemo(() => {
     return servers.filter(server => {
       const matchesStatus = statusFilter === 'all' || server.status === statusFilter
+      const isHost = !server.parent_id && (server.server_type === 'dedicated' || server.server_type === 'physical')
+      const isVps = Boolean(server.parent_id) || server.server_type === 'vps'
+
+      if (roleFilter === 'hosts' && !isHost) return false
+      if (roleFilter === 'vps' && !isVps) return false
+
       const q = query.toLowerCase().trim()
       const matchesQuery =
         !q ||
         server.name.toLowerCase().includes(q) ||
         (server.hostname && server.hostname.toLowerCase().includes(q)) ||
+        (server.role && server.role.toLowerCase().includes(q)) ||
         (server.location && server.location.toLowerCase().includes(q)) ||
         (server.providers?.name && server.providers.name.toLowerCase().includes(q))
       return matchesStatus && matchesQuery
     })
-  }, [servers, statusFilter, query])
+  }, [servers, statusFilter, roleFilter, query])
 
   const totals = useMemo(() => {
+    const physicalHosts = servers.filter(s => !s.parent_id && (s.server_type === 'dedicated' || s.server_type === 'physical'))
+    const virtualVps = servers.filter(s => Boolean(s.parent_id) || s.server_type === 'vps')
+    const active = servers.filter(s => s.status === 'active')
+    const totalCost = servers.reduce((acc, s) => acc + (Number(s.monthly_cost) || 0), 0)
+
     return {
       all: servers.length,
-      active: servers.filter(s => s.status === 'active').length,
-      maintenance: servers.filter(s => s.status === 'maintenance').length,
-      inactive: servers.filter(s => s.status === 'inactive').length,
-      totalCost: servers.reduce((acc, s) => acc + (Number(s.monthly_cost) || 0), 0)
+      physicalHosts: physicalHosts.length,
+      virtualVps: virtualVps.length,
+      active: active.length,
+      totalCost
     }
   }, [servers])
 
@@ -125,11 +160,11 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       <div className="page-heading">
         <div>
           <div className="eyebrow">Infraestructura</div>
-          <h1>Servidores</h1>
-          <p>Gestión de servidores dedicados, VPS y máquinas virtuales en la nube.</p>
+          <h1>Servidores y Virtualización Proxmox</h1>
+          <p>Gestión de hipervisores físicos dedicados, máquinas virtuales (VPS) y contenedores LXC.</p>
         </div>
         <button className="button primary" onClick={() => navigate('/servers/new')}>
-          <Plus size={16} /> Nuevo Servidor
+          <Plus size={16} /> Nuevo Servidor / VPS
         </button>
       </div>
 
@@ -139,19 +174,19 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       {/* KPI Stats */}
       <div className="stats-grid">
         <div className="stat-card">
-          <div className="stat-label">Total servidores</div>
-          <div className="stat-value">{totals.all}</div>
-          <div className="stat-caption">Instancias registradas</div>
+          <div className="stat-label">Hipervisores Proxmox</div>
+          <div className="stat-value" style={{ color: '#0284c7' }}>{totals.physicalHosts}</div>
+          <div className="stat-caption">Servidores dedicados físicos</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Activos</div>
-          <div className="stat-value" style={{ color: '#16a34a' }}>{totals.active}</div>
+          <div className="stat-label">VPS Virtualizados</div>
+          <div className="stat-value" style={{ color: '#16a34a' }}>{totals.virtualVps}</div>
+          <div className="stat-caption">Máquinas KVM / LXC</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Instancias Activas</div>
+          <div className="stat-value" style={{ color: '#0f172a' }}>{totals.active}</div>
           <div className="stat-caption">Operando en producción</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Mantenimiento / Inactivos</div>
-          <div className="stat-value" style={{ color: '#eab308' }}>{totals.maintenance + totals.inactive}</div>
-          <div className="stat-caption">Requieren atención</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Gasto Mensual Servidores</div>
@@ -169,18 +204,30 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               className="input"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Buscar por nombre, hostname, ubicación…"
+              placeholder="Buscar por nombre, hostname, función, ubicación…"
             />
           </div>
-          <div className="filter-wrap">
-            <Filter size={16} />
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-              <option value="all">Todos los estados</option>
-              <option value="active">Activo</option>
-              <option value="maintenance">Mantenimiento</option>
-              <option value="inactive">Inactivo</option>
-              <option value="decommissioned">Baja</option>
-            </select>
+
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <div className="filter-wrap">
+              <Boxes size={16} />
+              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value as 'all' | 'hosts' | 'vps')}>
+                <option value="all">Todas las instancias ({servers.length})</option>
+                <option value="hosts">Solo Hipervisores Físicos ({totals.physicalHosts})</option>
+                <option value="vps">Solo VPS Virtuales ({totals.virtualVps})</option>
+              </select>
+            </div>
+
+            <div className="filter-wrap">
+              <Filter size={16} />
+              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                <option value="all">Todos los estados</option>
+                <option value="active">Activo</option>
+                <option value="maintenance">Mantenimiento</option>
+                <option value="inactive">Inactivo</option>
+                <option value="decommissioned">Baja</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -204,10 +251,10 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Servidor</th>
-                  <th>IPs</th>
+                  <th>Servidor / Instancia</th>
+                  <th>Tipo / Entorno</th>
+                  <th>IPs Asignadas</th>
                   <th>Proveedor</th>
-                  <th>Tipo</th>
                   <th>Costo / Mes</th>
                   <th>Ubicación</th>
                   <th>Estado</th>
@@ -219,23 +266,65 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               <tbody>
                 {filtered.map(server => {
                   const ipCount = serverIpCounts[server.id] || 0
+                  const childCount = vmCounts[server.id] || 0
+                  const isHost = !server.parent_id && (server.server_type === 'dedicated' || server.server_type === 'physical')
+                  const isVps = Boolean(server.parent_id) || server.server_type === 'vps'
+
                   return (
                     <tr key={server.id}>
                       <td>
                         <div
                           className="server-cell clickable"
                           onClick={() => navigate(`/servers/${server.id}`)}
-                          title="Clic para navegar al detalle de IPs y Reverse DNS"
+                          title="Clic para navegar al detalle"
                         >
-                          <div className="server-table-icon">
-                            <Server size={17} />
+                          <div
+                            className="server-table-icon"
+                            style={{
+                              background: isVps ? '#f0fdf4' : '#eff6ff',
+                              color: isVps ? '#16a34a' : '#2563eb'
+                            }}
+                          >
+                            {isVps ? <Boxes size={17} /> : <Server size={17} />}
                           </div>
                           <div>
-                            <strong>{server.name}</strong>
-                            <span>{server.hostname || 'Sin hostname'}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <strong>{server.vm_id ? `[${server.vm_id}] ` : ''}{server.name}</strong>
+                              {server.role && (
+                                <span style={{ fontSize: '10px', background: '#f1f5f9', color: '#334155', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                                  {server.role}
+                                </span>
+                              )}
+                            </div>
+                            <span>
+                              {server.parent_server ? (
+                                <span style={{ color: '#0284c7' }}>Host: {server.parent_server.name}</span>
+                              ) : (
+                                server.hostname || 'Sin hostname'
+                              )}
+                            </span>
                           </div>
                         </div>
                       </td>
+
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span className="type-chip">{typeNames[server.server_type] || server.server_type}</span>
+                          {isHost && childCount > 0 && (
+                            <button
+                              type="button"
+                              className="ip-badge"
+                              style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' }}
+                              onClick={() => navigate(`/servers/${server.id}`)}
+                              title="Ver las VMs de este Proxmox"
+                            >
+                              <Boxes size={11} />
+                              {childCount} {childCount === 1 ? 'VPS' : 'VPS'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
                       <td>
                         <button
                           type="button"
@@ -247,10 +336,9 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                           {ipCount} {ipCount === 1 ? 'IP' : 'IPs'}
                         </button>
                       </td>
+
                       <td>{server.providers?.name || <span className="muted-cell">Sin proveedor</span>}</td>
-                      <td>
-                        <span className="type-chip">{typeNames[server.server_type] || server.server_type}</span>
-                      </td>
+
                       <td>
                         {server.monthly_cost ? (
                           <strong style={{ color: '#1e293b' }}>${Number(server.monthly_cost).toFixed(2)}</strong>
@@ -258,6 +346,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                           <span className="muted-cell">—</span>
                         )}
                       </td>
+
                       <td>
                         {server.location ? (
                           <span className="location-cell">
@@ -268,14 +357,16 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                           <span className="muted-cell">—</span>
                         )}
                       </td>
+
                       <td>
                         <span className={`status-pill ${server.status}`}>{statusNames[server.status] || server.status}</span>
                       </td>
+
                       <td>
                         <div className="row-actions">
                           <button
                             className="icon-button"
-                            title="Ver detalles e IPs"
+                            title="Ver detalles"
                             onClick={() => navigate(`/servers/${server.id}`)}
                           >
                             <Eye size={15} />
@@ -317,9 +408,9 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
 
         <div className="table-footer">
           <span>
-            Mostrando {filtered.length} de {servers.length} servidores
+            Mostrando {filtered.length} de {servers.length} servidores e instancias
           </span>
-          <span>Inventario manual</span>
+          <span>Inventario Proxmox / Bare Metal</span>
         </div>
       </section>
     </div>

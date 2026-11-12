@@ -109,6 +109,10 @@ create table if not exists public.servers (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces(id) on delete cascade,
   provider_id uuid references public.providers(id) on delete set null,
+  parent_id uuid references public.servers(id) on delete cascade,
+  vm_id text,
+  vm_type text default 'qemu',
+  role text,
   name text not null,
   hostname text,
   server_type text not null default 'vps'
@@ -121,6 +125,9 @@ create table if not exists public.servers (
   status text not null default 'active'
     check (status in ('active','maintenance','inactive','decommissioned')),
   management_url text,
+  proxmox_api_url text,
+  proxmox_api_token_id text,
+  proxmox_api_token_secret text,
   purchased_at date,
   expires_at date,
   monthly_cost numeric(10,2) default 0.00 check (monthly_cost is null or monthly_cost >= 0),
@@ -241,6 +248,7 @@ create table if not exists public.ip_addresses (
   ip_type text not null default 'private' check (ip_type in ('public','private','management','loopback','other')),
   network_id uuid references public.networks(id) on delete set null,
   server_id uuid references public.servers(id) on delete cascade,
+  assigned_vps_id uuid references public.servers(id) on delete set null,
   label text,
   gateway inet,
   purpose text,

@@ -5,6 +5,10 @@ export interface Server {
   id: string
   workspace_id: string
   provider_id: string | null
+  parent_id?: string | null
+  vm_id?: number | string | null
+  vm_type?: 'qemu' | 'lxc' | null
+  role?: string | null
   name: string
   hostname: string | null
   server_type: ServerType
@@ -15,6 +19,9 @@ export interface Server {
   location: string | null
   status: ServerStatus
   management_url: string | null
+  proxmox_api_url?: string | null
+  proxmox_api_token_id?: string | null
+  proxmox_api_token_secret?: string | null
   purchased_at: string | null
   expires_at: string | null
   monthly_cost?: number | null
@@ -22,6 +29,8 @@ export interface Server {
   created_at: string
   updated_at: string
   providers?: { name: string } | null
+  parent_server?: { id: string; name: string } | null
+  ip_addresses?: { id: string; address: string; purpose?: string | null; reverse_dns?: string | null }[]
 }
 
 export type ProviderType = 'hosting' | 'cloud' | 'cdn' | 'dns' | 'registrar' | 'datacenter' | 'other'
@@ -43,6 +52,7 @@ export interface IPAddress {
   id: string
   workspace_id: string
   server_id: string | null
+  assigned_vps_id?: string | null
   address: string
   ip_type: 'public' | 'private' | 'management' | 'loopback' | 'other'
   network_id?: string | null
@@ -54,6 +64,7 @@ export interface IPAddress {
   created_at: string
   updated_at?: string
   servers?: { name: string; hostname: string | null } | null
+  assigned_vps?: { id: string; name: string; vm_id?: number | string | null } | null
 }
 
 export interface Network {

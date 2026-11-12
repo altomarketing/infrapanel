@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate, useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Save, Server } from 'lucide-react'
+import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
+import { ArrowLeft, Save, Server, Boxes } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import type { Provider, Server as ServerRecord, ServerStatus, ServerType } from '../types'
@@ -10,6 +10,10 @@ type FormState = {
   name: string
   hostname: string
   provider_id: string
+  parent_id: string
+  vm_id: string
+  vm_type: 'qemu' | 'lxc'
+  role: string
   server_type: ServerType
   operating_system: string
   cpu: string
@@ -29,6 +33,10 @@ const emptyForm: FormState = {
   name: '',
   hostname: '',
   provider_id: '',
+  parent_id: '',
+  vm_id: '',
+  vm_type: 'qemu',
+  role: '',
   server_type: 'dedicated',
   operating_system: '',
   cpu: '',
@@ -46,10 +54,17 @@ const emptyForm: FormState = {
 
 export default function ServerForm({ workspaceId, isNew }: { workspaceId: string; isNew?: boolean }) {
   const { serverId } = useParams<{ serverId: string }>()
+  const [searchParams] = useSearchParams()
+  const initialParent = searchParams.get('parent') || ''
   const navigate = useNavigate()
 
-  const [form, setForm] = useState<FormState>(emptyForm)
+  const [form, setForm] = useState<FormState>({
+    ...emptyForm,
+    parent_id: initialParent,
+    server_type: initialParent ? 'vps' : 'dedicated'
+  })
   const [providers, setProviders] = useState<Provider[]>([])
+  const [parentServers, setParentServers] = useState<ServerRecord[]>([])
   const [serverName, setServerName] = useState('')
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
@@ -70,7 +85,7 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
   )
 
   useEffect(() => {
-    // Load providers
+    // Load providers & physical servers (potential parents)
     void supabase!
       .from('providers')
       .select('*')
@@ -78,6 +93,16 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
       .order('name')
       .then(({ data }) => {
         if (data) setProviders(data as Provider[])
+      })
+
+    void supabase!
+      .from('servers')
+      .select('id,name,hostname,server_type')
+      .eq('workspace_id', workspaceId)
+      .in('server_type', ['dedicated', 'physical', 'other'])
+      .order('name')
+      .then(({ data }) => {
+        if (data) setParentServers(data as ServerRecord[])
       })
 
     if (!isNew && serverId) {
@@ -99,6 +124,10 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
             name: s.name,
             hostname: s.hostname || '',
             provider_id: s.provider_id || '',
+            parent_id: s.parent_id || '',
+            vm_id: s.vm_id ? String(s.vm_id) : '',
+            vm_type: s.vm_type || 'qemu',
+            role: s.role || '',
             server_type: s.server_type,
             operating_system: s.operating_system || '',
             cpu: s.cpu || '',
@@ -132,6 +161,10 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
       name: form.name.trim(),
       hostname: form.hostname.trim() || null,
       provider_id: form.provider_id || null,
+      parent_id: form.parent_id || null,
+      vm_id: form.vm_id.trim() || null,
+      vm_type: form.vm_type,
+      role: form.role.trim() || null,
       server_type: form.server_type,
       operating_system: form.operating_system.trim() || null,
       cpu: form.cpu.trim() || null,
@@ -146,11 +179,22 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
     }
 
     if (isNew) {
-      const { data, error: insertError } = await supabase!
+      let { data, error: insertError } = await supabase!
         .from('servers')
         .insert(payload)
         .select('id')
         .single()
+
+      if (insertError && (insertError.message.includes('parent_id') || insertError.message.includes('vm_id'))) {
+        // Fallback without new columns if migration not executed yet
+        delete payload.parent_id
+        delete payload.vm_id
+        delete payload.vm_type
+        delete payload.role
+        const res = await supabase!.from('servers').insert(payload).select('id').single()
+        data = res.data
+        insertError = res.error
+      }
 
       if (insertError) {
         setError(insertError.message)
@@ -158,7 +202,7 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
         return
       }
 
-      const newId = data.id
+      const newId = data!.id
 
       // If initial public/private IP provided, register it
       const ipRows = []
@@ -186,11 +230,19 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
 
       navigate(`/servers/${newId}`)
     } else if (serverId) {
-      const { error: updateError } = await supabase!
+      let { error: updateError } = await supabase!
         .from('servers')
         .update(payload)
         .eq('id', serverId)
         .eq('workspace_id', workspaceId)
+
+      if (updateError && (updateError.message.includes('parent_id') || updateError.message.includes('vm_id'))) {
+        delete payload.parent_id
+        delete payload.vm_id
+        delete payload.vm_type
+        delete payload.role
+        updateError = (await supabase!.from('servers').update(payload).eq('id', serverId).eq('workspace_id', workspaceId)).error
+      }
 
       if (updateError) {
         setError(updateError.message)
@@ -213,6 +265,8 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
     )
   }
 
+  const isVpsType = form.server_type === 'vps' || Boolean(form.parent_id)
+
   return (
     <div className="server-form-page">
       <div style={{ marginBottom: '18px' }}>
@@ -225,15 +279,15 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
 
       <section className="inpage-card">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '22px', borderBottom: '1px solid #f1f5f9', paddingBottom: '16px' }}>
-          <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: '#eff6ff', color: '#2563eb', display: 'grid', placeItems: 'center' }}>
-            <Server size={22} />
+          <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: isVpsType ? '#f0fdf4' : '#eff6ff', color: isVpsType ? '#16a34a' : '#2563eb', display: 'grid', placeItems: 'center' }}>
+            {isVpsType ? <Boxes size={22} /> : <Server size={22} />}
           </div>
           <div>
             <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0, color: '#1e293b' }}>
-              {isNew ? 'Registrar nuevo servidor' : `Editar servidor: ${serverName}`}
+              {isNew ? (isVpsType ? 'Registrar nuevo VPS / VM' : 'Registrar nuevo servidor') : `Editar servidor: ${serverName}`}
             </h1>
             <span style={{ fontSize: '13px', color: '#64748b' }}>
-              {isNew ? 'Ingresá las especificaciones y configuración de tu servidor.' : 'Modificá los parámetros, costos o notas técnicas.'}
+              {isNew ? 'Ingresá las especificaciones y configuración de tu equipo o máquina virtual.' : 'Modificá los parámetros, costos, vinculación o notas técnicas.'}
             </span>
           </div>
         </div>
@@ -241,11 +295,80 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
         <form onSubmit={handleSubmit}>
           <div className="form-grid">
             <div className="form-field">
+              <label>Tipo de servidor / instancia *</label>
+              <select
+                className="input"
+                value={form.server_type}
+                onChange={e => update('server_type', e.target.value as ServerType)}
+              >
+                <option value="dedicated">Dedicado (Bare Metal con Proxmox / Hipervisor)</option>
+                <option value="vps">VPS (Máquina Virtual en Proxmox)</option>
+                <option value="cloud">Cloud Instance</option>
+                <option value="physical">Servidor Físico</option>
+                <option value="virtual_machine">Máquina Virtual Genérica</option>
+                <option value="other">Otro</option>
+              </select>
+            </div>
+
+            {/* If VPS, show parent Proxmox host and VM ID */}
+            {isVpsType && (
+              <>
+                <div className="form-field">
+                  <label>Servidor Físico / Hipervisor Proxmox</label>
+                  <select
+                    className="input"
+                    value={form.parent_id}
+                    onChange={e => update('parent_id', e.target.value)}
+                  >
+                    <option value="">Sin hipervisor asignado (Host independiente)</option>
+                    {parentServers.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.hostname ? `(${p.hostname})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-field">
+                  <label>VM ID en Proxmox</label>
+                  <input
+                    className="input"
+                    placeholder="ej. 101"
+                    value={form.vm_id}
+                    onChange={e => update('vm_id', e.target.value)}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Tipo de virtualización</label>
+                  <select
+                    className="input"
+                    value={form.vm_type}
+                    onChange={e => update('vm_type', e.target.value as 'qemu' | 'lxc')}
+                  >
+                    <option value="qemu">QEMU / KVM</option>
+                    <option value="lxc">LXC Container</option>
+                  </select>
+                </div>
+
+                <div className="form-field">
+                  <label>Función / Rol del VPS</label>
+                  <input
+                    className="input"
+                    placeholder="ej. Radio Streaming / CWP Hosting / DB"
+                    value={form.role}
+                    onChange={e => update('role', e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="form-field">
               <label>Nombre identificatorio *</label>
               <input
                 className="input"
                 required
-                placeholder="ej. ns559079.superCwp"
+                placeholder="ej. ns559079.superCwp o radio13.altomarketing.net"
                 value={form.name}
                 onChange={e => update('name', e.target.value)}
               />
@@ -255,7 +378,7 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
               <label>Hostname / FQDN</label>
               <input
                 className="input"
-                placeholder="ej. ns559079.ip-198-50-231.net"
+                placeholder="ej. ns559079.ip-54-39-104.net"
                 value={form.hostname}
                 onChange={e => update('hostname', e.target.value)}
               />
@@ -278,23 +401,7 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
             </div>
 
             <div className="form-field">
-              <label>Tipo de servidor</label>
-              <select
-                className="input"
-                value={form.server_type}
-                onChange={e => update('server_type', e.target.value as ServerType)}
-              >
-                <option value="dedicated">Dedicado (Bare Metal)</option>
-                <option value="vps">VPS (Virtual Private Server)</option>
-                <option value="cloud">Cloud Instance</option>
-                <option value="physical">Servidor Físico</option>
-                <option value="virtual_machine">Máquina Virtual</option>
-                <option value="other">Otro</option>
-              </select>
-            </div>
-
-            <div className="form-field">
-              <label>Costo mensual del servidor ($)</label>
+              <label>Costo mensual ($)</label>
               <input
                 className="input"
                 type="number"
@@ -324,17 +431,17 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
               <label>Sistema Operativo</label>
               <input
                 className="input"
-                placeholder="ej. AlmaLinux 8 / Ubuntu 24.04"
+                placeholder="ej. AlmaLinux 8 / Proxmox VE 8.1"
                 value={form.operating_system}
                 onChange={e => update('operating_system', e.target.value)}
               />
             </div>
 
             <div className="form-field">
-              <label>Procesador (CPU)</label>
+              <label>Procesador (CPU / Cores)</label>
               <input
                 className="input"
-                placeholder="ej. AMD EPYC 7763 64C/128T"
+                placeholder="ej. 12 x Intel Xeon / 4 vCPU"
                 value={form.cpu}
                 onChange={e => update('cpu', e.target.value)}
               />
@@ -365,7 +472,7 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
             </div>
 
             <div className="form-field">
-              <label>Ubicación / Región</label>
+              <label>Ubicación / Datacenter</label>
               <input
                 className="input"
                 placeholder="ej. Beauharnois (BHS), Canadá"
@@ -375,11 +482,11 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
             </div>
 
             <div className="form-field">
-              <label>URL Panel de Gestión</label>
+              <label>URL Panel de Gestión / Proxmox (:8006)</label>
               <input
                 className="input"
                 type="url"
-                placeholder="https://ca.ovh.com/manager/..."
+                placeholder="https://ns559079.ip-54-39-104.net:8006"
                 value={form.management_url}
                 onChange={e => update('management_url', e.target.value)}
               />

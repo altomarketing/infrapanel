@@ -53,6 +53,22 @@ export interface IPAddress {
   notes: string | null
   created_at: string
   updated_at?: string
+  servers?: { name: string; hostname: string | null } | null
+}
+
+export interface Network {
+  id: string
+  workspace_id: string
+  name: string
+  cidr: string | null
+  gateway: string | null
+  vlan_id: number | null
+  network_type: string
+  description: string | null
+  monthly_cost?: number | null
+  notes: string | null
+  created_at: string
+  updated_at?: string
 }
 
 export type DomainStatus = 'active' | 'pending' | 'expired' | 'inactive'

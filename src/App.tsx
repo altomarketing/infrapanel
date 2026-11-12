@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard'
 import Servers from './pages/Servers'
 import Providers from './pages/Providers'
 import Domains from './pages/Domains'
+import Networks from './pages/Networks'
 import Layout from './components/Layout'
 
 export default function App() {
@@ -54,6 +55,7 @@ export default function App() {
       <Route path="/servers" element={<Servers workspaceId={workspaceId} />} />
       <Route path="/providers" element={<Providers workspaceId={workspaceId} />} />
       <Route path="/domains" element={<Domains workspaceId={workspaceId} />} />
+      <Route path="/networks" element={<Networks workspaceId={workspaceId} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   </Layout>

@@ -62,7 +62,7 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
     { label: 'Servidores', value: counts.servers, icon: Server, tone: 'blue', to: '/servers', caption: 'Equipos registrados' },
     { label: 'Proveedores', value: counts.providers, icon: Tags, tone: 'violet', to: '/providers', caption: 'Hosting, Cloud, DNS' },
     { label: 'Dominios', value: counts.domains, icon: Globe2, tone: 'green', to: '/domains', caption: 'Dominios e IPs asignadas' },
-    { label: 'Redes e IP', value: counts.networks, icon: Wifi, tone: 'orange', to: '/servers', caption: 'Redes y bloques' },
+    { label: 'Redes e IP', value: counts.networks, icon: Wifi, tone: 'orange', to: '/networks', caption: 'Redes y bloques' },
   ]
 
   return (

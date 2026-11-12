@@ -4,12 +4,12 @@ import {
   Activity,
   Check,
   Copy,
+  DollarSign,
   Edit2,
   ExternalLink,
   Eye,
   Filter,
   Globe2,
-  HardDrive,
   Layers,
   MapPin,
   Plus,
@@ -33,6 +33,7 @@ type FormState = {
   location: string
   public_ip: string
   private_ip: string
+  monthly_cost: string
   status: ServerStatus
   management_url: string
   expires_at: string
@@ -51,6 +52,7 @@ const emptyForm: FormState = {
   location: '',
   public_ip: '',
   private_ip: '',
+  monthly_cost: '',
   status: 'active',
   management_url: '',
   expires_at: '',
@@ -93,18 +95,20 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const [loadingIps, setLoadingIps] = useState(false)
   const [copiedIp, setCopiedIp] = useState<string | null>(null)
 
-  // Add / Edit IP inside Detail modal
+  // Add IP inside Detail modal
   const [showAddIp, setShowAddIp] = useState(false)
   const [newIpAddress, setNewIpAddress] = useState('')
   const [newIpType, setNewIpType] = useState<'public' | 'private'>('public')
   const [newIpRdns, setNewIpRdns] = useState('')
   const [newIpLabel, setNewIpLabel] = useState('')
+  const [newIpCost, setNewIpCost] = useState('')
   const [savingIp, setSavingIp] = useState(false)
 
   // Editing single IP inside detail modal
   const [editingIpId, setEditingIpId] = useState<string | null>(null)
   const [editRdnsValue, setEditRdnsValue] = useState('')
   const [editLabelValue, setEditLabelValue] = useState('')
+  const [editCostValue, setEditCostValue] = useState('')
 
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -114,7 +118,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     setError('')
     const [serverResult, providerResult, ipCountResult] = await Promise.all([
       supabase!.from('servers').select('*, providers(name)').eq('workspace_id', workspaceId).order('created_at', { ascending: false }),
-      supabase!.from('providers').select('id,name').eq('workspace_id', workspaceId).order('name'),
+      supabase!.from('providers').select('*').eq('workspace_id', workspaceId).order('name'),
       supabase!.from('ip_addresses').select('server_id').eq('workspace_id', workspaceId).not('server_id', 'is', null)
     ])
 
@@ -203,6 +207,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       location: server.location || '',
       public_ip: '',
       private_ip: '',
+      monthly_cost: server.monthly_cost?.toString() || '',
       status: server.status,
       management_url: server.management_url || '',
       expires_at: server.expires_at || '',
@@ -236,7 +241,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     setError('')
     setNotice('')
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       workspace_id: workspaceId,
       name: form.name.trim(),
       hostname: form.hostname.trim() || null,
@@ -253,6 +258,12 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       notes: form.notes.trim() || null
     }
 
+    if (form.monthly_cost) {
+      payload.monthly_cost = Number(form.monthly_cost)
+    } else {
+      payload.monthly_cost = null
+    }
+
     let serverId = editing?.id
 
     if (editing) {
@@ -263,7 +274,11 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
         .eq('workspace_id', workspaceId)
 
       if (updateError) {
-        setError(updateError.message)
+        if (updateError.message.includes('monthly_cost')) {
+          setError(`Para guardar el costo mensual, ejecuta el script SQL de actualización en Supabase: ${updateError.message}`)
+        } else {
+          setError(updateError.message)
+        }
         setSaving(false)
         return
       }
@@ -275,7 +290,11 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
         .single()
 
       if (insertError) {
-        setError(insertError.message)
+        if (insertError.message.includes('monthly_cost')) {
+          setError(`Para guardar el costo mensual, ejecuta el script SQL de actualización en Supabase: ${insertError.message}`)
+        } else {
+          setError(insertError.message)
+        }
         setSaving(false)
         return
       }
@@ -325,13 +344,17 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     setSavingIp(true)
     setError('')
 
-    const ipPayload = {
+    const ipPayload: Record<string, unknown> = {
       workspace_id: workspaceId,
       server_id: detailServer.id,
       address: newIpAddress.trim(),
       ip_type: newIpType,
       label: newIpLabel.trim() || null,
-      purpose: newIpRdns.trim() || null // Reverse DNS (PTR)
+      purpose: newIpRdns.trim() || null
+    }
+
+    if (newIpCost.trim()) {
+      ipPayload.monthly_cost = Number(newIpCost)
     }
 
     const { error: ipInsertErr } = await supabase!.from('ip_addresses').insert(ipPayload)
@@ -342,6 +365,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       setNewIpAddress('')
       setNewIpRdns('')
       setNewIpLabel('')
+      setNewIpCost('')
       setShowAddIp(false)
       await loadServerIps(detailServer.id)
       await load()
@@ -361,14 +385,21 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  // Save edited Reverse DNS / label on single IP
+  // Save edited Reverse DNS / label / cost on single IP
   async function handleSaveIpEdit(ipId: string) {
+    const patchData: Record<string, unknown> = {
+      purpose: editRdnsValue.trim() || null,
+      label: editLabelValue.trim() || null
+    }
+    if (editCostValue.trim()) {
+      patchData.monthly_cost = Number(editCostValue)
+    } else {
+      patchData.monthly_cost = null
+    }
+
     const { error: patchErr } = await supabase!
       .from('ip_addresses')
-      .update({
-        purpose: editRdnsValue.trim() || null,
-        label: editLabelValue.trim() || null
-      })
+      .update(patchData)
       .eq('id', ipId)
       .eq('workspace_id', workspaceId)
 
@@ -386,13 +417,24 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     setTimeout(() => setCopiedIp(null), 2000)
   }
 
+  const totalServerCost = useMemo(() => {
+    return servers.reduce((acc, s) => acc + (s.monthly_cost || 0), 0)
+  }, [servers])
+
+  const detailTotalCost = useMemo(() => {
+    if (!detailServer) return 0
+    const sCost = detailServer.monthly_cost || 0
+    const ipCost = detailIps.reduce((acc, ip) => acc + (ip.monthly_cost || 0), 0)
+    return sCost + ipCost
+  }, [detailServer, detailIps])
+
   return (
     <div className="page-stack">
       <div className="page-heading">
         <div>
           <div className="eyebrow">INVENTARIO</div>
           <h1>Servidores</h1>
-          <p>Administrá tus VPS, servidores dedicados y máquinas físicas.</p>
+          <p>Administrá tus VPS, servidores dedicados, IPs asociadas y costos mensuales.</p>
         </div>
         <button className="button primary" onClick={openNew}>
           <Plus size={17} /> Agregar servidor
@@ -420,11 +462,11 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
         </div>
         <div>
           <span className="summary-icon orange">
-            <HardDrive size={18} />
+            <DollarSign size={18} />
           </span>
           <div>
-            <strong>{servers.filter(s => s.status === 'maintenance').length}</strong>
-            <span>En mantenimiento</span>
+            <strong>${totalServerCost.toFixed(2)}</strong>
+            <span>Costo mensual servidores</span>
           </div>
         </div>
       </div>
@@ -486,6 +528,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                   <th>IPs</th>
                   <th>Proveedor</th>
                   <th>Tipo</th>
+                  <th>Costo / Mes</th>
                   <th>Ubicación</th>
                   <th>Estado</th>
                   <th>
@@ -502,7 +545,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                         <div
                           className="server-cell clickable"
                           onClick={() => openDetail(server)}
-                          title="Clic para ver IPs y Reverse DNS"
+                          title="Clic para ver IPs, Reverse DNS y Costos"
                         >
                           <div className="server-table-icon">
                             <Server size={17} />
@@ -527,6 +570,13 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                       <td>{server.providers?.name || <span className="muted-cell">Sin proveedor</span>}</td>
                       <td>
                         <span className="type-chip">{typeNames[server.server_type] || server.server_type}</span>
+                      </td>
+                      <td>
+                        {server.monthly_cost ? (
+                          <strong style={{ color: '#1e293b' }}>${Number(server.monthly_cost).toFixed(2)}</strong>
+                        ) : (
+                          <span className="muted-cell">—</span>
+                        )}
                       </td>
                       <td>
                         {server.location ? (
@@ -589,7 +639,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
         </div>
       </section>
 
-      {/* MODAL DETALLE DE SERVIDOR (IPS Y REVERSE DNS) */}
+      {/* MODAL DETALLE DE SERVIDOR (IPS, REVERSE DNS & COSTOS) */}
       {detailServer && (
         <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) closeDetail() }}>
           <div className="modal-card detail-modal">
@@ -626,8 +676,20 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               </button>
             </div>
 
-            {/* Quick specs */}
+            {/* Quick specs & Cost Summary */}
             <div className="specs-panel">
+              <div className="spec-item">
+                <span>Costo del Servidor</span>
+                <strong style={{ color: '#2563eb' }}>
+                  ${(detailServer.monthly_cost || 0).toFixed(2)} / mes
+                </strong>
+              </div>
+              <div className="spec-item">
+                <span>Costo Total (Inc. IPs)</span>
+                <strong style={{ color: '#16a34a' }}>
+                  ${detailTotalCost.toFixed(2)} / mes
+                </strong>
+              </div>
               <div className="spec-item">
                 <span>Sistema Operativo</span>
                 <strong>{detailServer.operating_system || 'No especificado'}</strong>
@@ -657,7 +719,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               <div className="ips-header">
                 <h3>
                   <Layers size={17} />
-                  Direcciones IP y Reverse DNS (PTR)
+                  Direcciones IP, Reverse DNS y Costos
                   <span className="ip-badge">{detailIps.length}</span>
                 </h3>
                 <button
@@ -674,8 +736,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               {/* Form to add IP */}
               {showAddIp && (
                 <form className="ip-add-box" onSubmit={handleAddIp}>
-                  <h4>Asignar nueva dirección IP</h4>
-                  <div className="ip-add-grid">
+                  <h4>Asignar nueva dirección IP o Bloque</h4>
+                  <div className="ip-add-grid" style={{ gridTemplateColumns: '1.2fr 0.8fr 1.5fr 1fr 0.8fr auto' }}>
                     <div>
                       <label>Dirección IP o Bloque *</label>
                       <input
@@ -688,7 +750,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                       />
                     </div>
                     <div>
-                      <label>Tipo de IP</label>
+                      <label>Tipo</label>
                       <select
                         className="input"
                         value={newIpType}
@@ -714,6 +776,18 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                         placeholder="Failover, CWP..."
                         value={newIpLabel}
                         onChange={e => setNewIpLabel(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label>Costo $/mes</label>
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="3.00"
+                        value={newIpCost}
+                        onChange={e => setNewIpCost(e.target.value)}
                       />
                     </div>
                     <div>
@@ -743,6 +817,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                         <th>Tipo</th>
                         <th>Reverse DNS (PTR)</th>
                         <th>Etiqueta / Uso</th>
+                        <th>Costo/mes</th>
                         <th style={{ textAlign: 'right' }}>Acciones</th>
                       </tr>
                     </thead>
@@ -801,6 +876,26 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                               )}
                             </td>
                             <td>
+                              {isEditingThis ? (
+                                <input
+                                  className="input"
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  style={{ height: '28px', width: '70px', fontSize: '10px' }}
+                                  value={editCostValue}
+                                  onChange={e => setEditCostValue(e.target.value)}
+                                  placeholder="$0.00"
+                                />
+                              ) : ip.monthly_cost ? (
+                                <span style={{ fontWeight: 600, color: '#16a34a' }}>
+                                  ${Number(ip.monthly_cost).toFixed(2)}
+                                </span>
+                              ) : (
+                                <span className="muted-cell">—</span>
+                              )}
+                            </td>
+                            <td>
                               <div className="ip-actions">
                                 {isEditingThis ? (
                                   <>
@@ -826,11 +921,12 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                                     <button
                                       type="button"
                                       className="icon-button"
-                                      title="Editar Reverse DNS / Etiqueta"
+                                      title="Editar Reverse DNS, Etiqueta y Costo"
                                       onClick={() => {
                                         setEditingIpId(ip.id)
                                         setEditRdnsValue(ip.purpose || '')
                                         setEditLabelValue(ip.label || '')
+                                        setEditCostValue(ip.monthly_cost?.toString() || '')
                                       }}
                                     >
                                       <Edit2 size={13} />
@@ -899,7 +995,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               <div>
                 <div className="eyebrow">INVENTARIO</div>
                 <h2>{editing ? 'Editar servidor' : 'Nuevo servidor'}</h2>
-                <p>Completá los datos principales del equipo.</p>
+                <p>Completá los datos principales del equipo y su costo mensual.</p>
               </div>
               <button type="button" className="icon-button" onClick={() => setModalOpen(false)}>
                 <X size={19} />
@@ -955,6 +1051,18 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="form-field">
+                <label>Costo mensual ($)</label>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.monthly_cost}
+                  onChange={e => update('monthly_cost', e.target.value)}
+                  placeholder="Ej. 49.99"
+                />
               </div>
               <div className="form-field">
                 <label>Sistema operativo</label>

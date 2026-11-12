@@ -6,6 +6,8 @@ import { ensureWorkspace } from './lib/workspace'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Servers from './pages/Servers'
+import Providers from './pages/Providers'
+import Domains from './pages/Domains'
 import Layout from './components/Layout'
 
 export default function App() {
@@ -50,6 +52,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Dashboard workspaceId={workspaceId} />} />
       <Route path="/servers" element={<Servers workspaceId={workspaceId} />} />
+      <Route path="/providers" element={<Providers workspaceId={workspaceId} />} />
+      <Route path="/domains" element={<Domains workspaceId={workspaceId} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   </Layout>

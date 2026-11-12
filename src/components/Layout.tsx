@@ -7,7 +7,7 @@ import type { LucideIcon } from 'lucide-react'
 
 const nav: { label: string; items: { to: string; label: string; icon: LucideIcon; soon?: boolean }[] }[] = [
   { label: 'General', items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }, { to: '/servers', label: 'Servidores', icon: Server }] },
-  { label: 'Infraestructura', items: [{ to: '/services', label: 'Servicios', icon: Boxes, soon: true }, { to: '/domains', label: 'Dominios', icon: Globe2, soon: true }, { to: '/networks', label: 'Redes e IP', icon: Network, soon: true }, { to: '/providers', label: 'Proveedores', icon: Tags, soon: true }] },
+  { label: 'Infraestructura', items: [{ to: '/services', label: 'Servicios', icon: Boxes, soon: true }, { to: '/domains', label: 'Dominios', icon: Globe2 }, { to: '/networks', label: 'Redes e IP', icon: Network, soon: true }, { to: '/providers', label: 'Proveedores', icon: Tags }] },
   { label: 'Sistema', items: [{ to: '/activity', label: 'Actividad', icon: Activity, soon: true }, { to: '/settings', label: 'Configuración', icon: Settings, soon: true }] },
 ]
 

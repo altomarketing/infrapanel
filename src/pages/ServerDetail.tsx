@@ -78,6 +78,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
   const [server, setServer] = useState<ServerRecord | null>(null)
   const [ips, setIps] = useState<IPAddress[]>([])
+  const [parentIps, setParentIps] = useState<IPAddress[]>([])
   const [vms, setVms] = useState<ServerRecord[]>([])
   const [domains, setDomains] = useState<Domain[]>([])
   const [loading, setLoading] = useState(true)
@@ -188,23 +189,35 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     if (!serverId) return
     setLoadingIps(true)
 
-    // Select with assigned_vps relation if exists
-    const { data, error: ipErr } = await supabase!
+    // Check if this server is a child VPS to know parent_id
+    const { data: srvData } = await supabase!
+      .from('servers')
+      .select('parent_id')
+      .eq('id', serverId)
+      .maybeSingle()
+
+    const parentId = srvData?.parent_id
+
+    let query = supabase!
       .from('ip_addresses')
-      .select('*, assigned_vps:assigned_vps_id(id,name,vm_id)')
-      .eq('server_id', serverId)
+      .select('*, assigned_vps:assigned_vps_id(id,name,vm_id,vm_type)')
       .eq('workspace_id', workspaceId)
-      .order('address', { ascending: true })
+
+    if (parentId) {
+      // For child VPS, show IPs assigned to this VPS or having server_id = serverId
+      query = query.or(`assigned_vps_id.eq.${serverId},server_id.eq.${serverId}`)
+    } else {
+      query = query.eq('server_id', serverId)
+    }
+
+    const { data, error: ipErr } = await query.order('address', { ascending: true })
 
     if (ipErr) {
-      // Fallback without relation
-      const fallback = await supabase!
-        .from('ip_addresses')
-        .select('*')
-        .eq('server_id', serverId)
-        .eq('workspace_id', workspaceId)
-        .order('address', { ascending: true })
+      const fallbackQuery = parentId
+        ? supabase!.from('ip_addresses').select('*').eq('workspace_id', workspaceId).or(`assigned_vps_id.eq.${serverId},server_id.eq.${serverId}`)
+        : supabase!.from('ip_addresses').select('*').eq('workspace_id', workspaceId).eq('server_id', serverId)
 
+      const fallback = await fallbackQuery.order('address', { ascending: true })
       if (fallback.data) {
         setIps(fallback.data.filter(ip => !ip.address.includes(':')))
       }
@@ -212,6 +225,20 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       const ipv4Only = (data || []).filter(ip => !ip.address.includes(':'))
       setIps(ipv4Only as IPAddress[])
     }
+
+    // If child VPS, also load parent server IPs to allow quick association
+    if (parentId) {
+      const { data: pData } = await supabase!
+        .from('ip_addresses')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .eq('server_id', parentId)
+        .order('address', { ascending: true })
+      if (pData) {
+        setParentIps(pData.filter(ip => !ip.address.includes(':')))
+      }
+    }
+
     setLoadingIps(false)
   }, [serverId, workspaceId])
 
@@ -363,6 +390,27 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     setTimeout(() => setCopiedIp(null), 1800)
   }
 
+  // Quick Assign / Unassign IP to VPS
+  async function handleQuickAssignIp(ipId: string, vpsId: string | null) {
+    if (!ipId) return
+    setError('')
+    const { error: err } = await supabase!
+      .from('ip_addresses')
+      .update({ assigned_vps_id: vpsId || null })
+      .eq('id', ipId)
+      .eq('workspace_id', workspaceId)
+
+    if (err) {
+      setError(`Error al asociar IP: ${err.message}`)
+    } else {
+      const targetVm = vpsId ? vms.find(v => v.id === vpsId) : null
+      const vmName = targetVm ? targetVm.name : 'Host Proxmox'
+      setNotice(vpsId ? `IP asociada a ${vmName} correctamente.` : 'IP liberada (asignada al Host base).')
+      await loadIps()
+      await loadVms()
+    }
+  }
+
   // Add IP handler
   async function handleAddIp(e: FormEvent) {
     e.preventDefault()
@@ -377,9 +425,54 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       if (autoHost) rdns = autoHost
     }
 
+    const hostServerId = isChildVps && server?.parent_id ? server.parent_id : serverId
+    const targetVpsId = isChildVps ? serverId : (newIpAssignedVm || null)
+
+    // Check if IP already exists in workspace
+    const { data: existingIp } = await supabase!
+      .from('ip_addresses')
+      .select('id, server_id, assigned_vps_id')
+      .eq('workspace_id', workspaceId)
+      .eq('address', newIpAddress.trim())
+      .maybeSingle()
+
+    if (existingIp) {
+      // Update existing IP with assignment
+      const patchData: Record<string, unknown> = {
+        server_id: hostServerId,
+        assigned_vps_id: targetVpsId,
+        purpose: rdns || null,
+        reverse_dns: rdns || null
+      }
+      if (newIpLabel.trim()) patchData.label = newIpLabel.trim()
+      if (newIpCost.trim()) patchData.monthly_cost = Number(newIpCost)
+
+      const { error: updErr } = await supabase!
+        .from('ip_addresses')
+        .update(patchData)
+        .eq('id', existingIp.id)
+
+      if (updErr) {
+        setError(`Error al asociar IP existente: ${updErr.message}`)
+      } else {
+        setNotice(`IP ${newIpAddress.trim()} asociada con éxito.`)
+        setNewIpAddress('')
+        setNewIpRdns('')
+        setNewIpLabel('')
+        setNewIpCost('')
+        setNewIpAssignedVm('')
+        setShowAddIp(false)
+        await loadIps()
+        await loadVms()
+      }
+      setSavingIp(false)
+      return
+    }
+
     const ipPayload: Record<string, unknown> = {
       workspace_id: workspaceId,
-      server_id: serverId,
+      server_id: hostServerId,
+      assigned_vps_id: targetVpsId,
       address: newIpAddress.trim(),
       ip_type: newIpType,
       label: newIpLabel.trim() || null,
@@ -389,10 +482,6 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
     if (newIpCost.trim()) {
       ipPayload.monthly_cost = Number(newIpCost)
-    }
-
-    if (newIpAssignedVm) {
-      ipPayload.assigned_vps_id = newIpAssignedVm
     }
 
     let insertErr = (await supabase!.from('ip_addresses').insert(ipPayload)).error
@@ -413,6 +502,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       setNewIpAssignedVm('')
       setShowAddIp(false)
       await loadIps()
+      await loadVms()
     }
     setSavingIp(false)
   }
@@ -426,11 +516,13 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     } else {
       setNotice(`IP ${addr} eliminada.`)
       await loadIps()
+      await loadVms()
     }
   }
 
   // Inline edit save for IP
   async function handleSaveIpEdit(ipId: string) {
+    setError('')
     const patchData: Record<string, unknown> = {
       purpose: editRdnsValue.trim() || null,
       reverse_dns: editRdnsValue.trim() || null,
@@ -452,8 +544,10 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     if (patchErr) {
       setError(`Error al actualizar IP: ${patchErr.message}`)
     } else {
+      setNotice('IP actualizada con éxito.')
       setEditingIpId(null)
       await loadIps()
+      await loadVms()
     }
   }
 
@@ -1262,18 +1356,45 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
                         <td>
                           {assignedIp ? (
-                            <div>
-                              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
-                                {assignedIp.address}
-                              </span>
-                              {assignedIp.reverse_dns && (
-                                <div style={{ fontSize: '10px', color: '#2563eb', fontFamily: 'monospace' }}>
-                                  {assignedIp.reverse_dns}
-                                </div>
-                              )}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                              <div>
+                                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
+                                  {assignedIp.address}
+                                </span>
+                                {assignedIp.reverse_dns && (
+                                  <div style={{ fontSize: '10px', color: '#2563eb', fontFamily: 'monospace' }}>
+                                    {assignedIp.reverse_dns}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                className="icon-button"
+                                style={{ width: '22px', height: '22px', color: '#94a3b8' }}
+                                title="Desasociar IP de este VPS"
+                                onClick={() => handleQuickAssignIp(assignedIp.id, null)}
+                              >
+                                <X size={13} />
+                              </button>
                             </div>
                           ) : (
-                            <span className="muted-cell">Sin IP asignada</span>
+                            <select
+                              className="input"
+                              style={{ height: '28px', fontSize: '11px', padding: '0 6px', maxWidth: '175px', color: '#2563eb', borderColor: '#bfdbfe', background: '#eff6ff' }}
+                              value=""
+                              onChange={e => {
+                                if (e.target.value) handleQuickAssignIp(e.target.value, vm.id)
+                              }}
+                            >
+                              <option value="" disabled>+ Asociar IP failover…</option>
+                              {ips
+                                .filter(ip => !ip.assigned_vps_id || ip.assigned_vps_id === vm.id)
+                                .map(ip => (
+                                  <option key={ip.id} value={ip.id}>
+                                    {ip.address} {ip.reverse_dns ? `(${ip.reverse_dns})` : ''}
+                                  </option>
+                                ))}
+                            </select>
                           )}
                         </td>
 
@@ -1391,6 +1512,51 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
               </button>
             </div>
           </div>
+
+          {/* Quick associate failover IP from host (for child VPS) */}
+          {isChildVps && parentIps.length > 0 && (
+            <div
+              className="inpage-subform"
+              style={{
+                marginBottom: '18px',
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                flexWrap: 'wrap'
+              }}
+            >
+              <div>
+                <strong style={{ fontSize: '13px', color: '#1e293b', display: 'block' }}>
+                  Asociar IP failover desde el Host Proxmox ({server?.parent_server?.name || 'Hipervisor'})
+                </strong>
+                <span style={{ fontSize: '12px', color: '#64748b' }}>
+                  Elegí una IP pública o failover disponible en el Proxmox físico para asociarla a este VPS.
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <select
+                  className="input"
+                  style={{ height: '34px', fontSize: '12px', minWidth: '220px' }}
+                  onChange={e => {
+                    if (e.target.value) handleQuickAssignIp(e.target.value, serverId || null)
+                  }}
+                  defaultValue=""
+                >
+                  <option value="" disabled>Seleccionar IP failover del Host…</option>
+                  {parentIps
+                    .filter(p => !p.assigned_vps_id || p.assigned_vps_id === serverId)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.address} {p.reverse_dns ? `(${p.reverse_dns})` : ''} {p.assigned_vps_id === serverId ? '✓ Ya asignada' : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+          )}
 
           {/* IN-PAGE ADD IP PANEL (NO MODAL) */}
           {showAddIp && (
@@ -1615,28 +1781,42 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                                   </option>
                                 ))}
                               </select>
-                            ) : assignedVm ? (
-                              <Link
-                                to={`/servers/${assignedVm.id}`}
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '5px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  color: assignedVm.vm_type === 'lxc' ? '#0891b2' : '#16a34a',
-                                  background: assignedVm.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4',
-                                  border: `1px solid ${assignedVm.vm_type === 'lxc' ? '#a5f3fc' : '#bbf7d0'}`,
-                                  padding: '2px 8px',
-                                  borderRadius: '6px'
-                                }}
-                                title={assignedVm.vm_type === 'lxc' ? 'Ver ficha del contenedor LXC' : 'Ver ficha de la máquina KVM'}
-                              >
-                                {assignedVm.vm_type === 'lxc' ? <Container size={12} /> : <Monitor size={12} />}
-                                {assignedVm.vm_type === 'lxc' ? 'LXC' : 'KVM'} {assignedVm.vm_id ? `[${assignedVm.vm_id}] ` : ''}{assignedVm.name}
-                              </Link>
                             ) : (
-                              <span className="muted-cell">Host base</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <select
+                                  className="input"
+                                  style={{
+                                    height: '28px',
+                                    fontSize: '11px',
+                                    minWidth: '160px',
+                                    padding: '0 6px',
+                                    fontWeight: assignedVm ? 600 : 400,
+                                    background: assignedVm ? (assignedVm.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4') : '#fff',
+                                    borderColor: assignedVm ? (assignedVm.vm_type === 'lxc' ? '#a5f3fc' : '#bbf7d0') : '#cbd5e1',
+                                    color: assignedVm ? (assignedVm.vm_type === 'lxc' ? '#0891b2' : '#16a34a') : '#64748b'
+                                  }}
+                                  value={assignedVm ? assignedVm.id : (ip.assigned_vps_id || '')}
+                                  onChange={e => handleQuickAssignIp(ip.id, e.target.value || null)}
+                                  title="Asignar IP a un VPS"
+                                >
+                                  <option value="">Host Proxmox (Libre)</option>
+                                  {vms.map(v => (
+                                    <option key={v.id} value={v.id}>
+                                      {v.vm_type === 'lxc' ? '📦 LXC' : '🖥️ KVM'} [{v.vm_id || '?'}] {v.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                {assignedVm && (
+                                  <Link
+                                    to={`/servers/${assignedVm.id}`}
+                                    className="icon-button"
+                                    style={{ width: '24px', height: '24px' }}
+                                    title="Ir a la ficha de este VPS"
+                                  >
+                                    <ChevronRight size={14} />
+                                  </Link>
+                                )}
+                              </div>
                             )}
                           </td>
                         )}

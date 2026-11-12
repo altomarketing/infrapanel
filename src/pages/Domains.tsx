@@ -15,6 +15,7 @@ import {
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import type { Domain, DomainStatus, IPAddress, Provider, Server as ServerRecord } from '../types'
 
 type FormState = {
@@ -51,6 +52,7 @@ const statusLabels: Record<DomainStatus, string> = {
 }
 
 export default function Domains({ workspaceId }: { workspaceId: string }) {
+  useSetBreadcrumbs([{ label: 'Dominios' }])
   const [domains, setDomains] = useState<Domain[]>([])
   const [providers, setProviders] = useState<Provider[]>([])
   const [servers, setServers] = useState<ServerRecord[]>([])
@@ -285,173 +287,19 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
 
       {error && !modalOpen && <div className="alert error">{error}</div>}
 
-      <section className="panel table-panel">
-        <div className="table-toolbar">
-          <div className="search-box">
-            <Search size={17} />
-            <input
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Buscar por dominio, IP, servidor o notas…"
-            />
-          </div>
-          <div className="filter-wrap">
-            <Filter size={16} />
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-              <option value="all">Todos los estados</option>
-              {Object.entries(statusLabels).map(([val, label]) => (
-                <option key={val} value={val}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="table-empty">Cargando dominios…</div>
-        ) : filtered.length === 0 ? (
-          <div className="table-empty">
-            <div className="empty-icon">
-              <Globe2 size={22} />
-            </div>
-            <strong>{domains.length ? 'No hay resultados' : 'Todavía no registraste dominios'}</strong>
-            <span>{domains.length ? 'Probá cambiar la búsqueda.' : 'Agregá tu primer dominio y asócialo a una IP.'}</span>
-            {!domains.length && (
-              <button className="button secondary" onClick={openNew}>
-                <Plus size={16} /> Agregar dominio
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Dominio</th>
-                  <th>IP Asociada</th>
-                  <th>Servidor</th>
-                  <th>Registrador / DNS</th>
-                  <th>Costo / Mes</th>
-                  <th>Vencimiento</th>
-                  <th>Estado</th>
-                  <th>
-                    <span className="sr-only">Acciones</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(d => (
-                  <tr key={d.id}>
-                    <td>
-                      <div className="server-cell">
-                        <div className="server-table-icon">
-                          <Globe2 size={16} />
-                        </div>
-                        <div>
-                          <strong>{d.name}</strong>
-                          <span>{d.notes || (d.auto_renew ? 'Auto-renovación activa' : 'Renovación manual')}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      {d.target_ip ? (
-                        <div className="ip-address-cell" style={{ fontSize: '10px' }}>
-                          <span>{d.target_ip}</span>
-                          <button
-                            type="button"
-                            className={`copy-pill ${copiedIp === d.target_ip ? 'copied' : ''}`}
-                            onClick={() => copyToClipboard(d.target_ip!)}
-                            title="Copiar IP"
-                          >
-                            {copiedIp === d.target_ip ? <Check size={11} /> : <Copy size={11} />}
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="muted-cell">Sin IP asociada</span>
-                      )}
-                    </td>
-                    <td>
-                      {d.servers?.name ? (
-                        <span className="type-chip">
-                          <Server size={11} style={{ marginRight: '4px' }} />
-                          {d.servers.name}
-                        </span>
-                      ) : (
-                        <span className="muted-cell">—</span>
-                      )}
-                    </td>
-                    <td>
-                      <div style={{ fontSize: '10px' }}>
-                        <div>{d.registrar_provider?.name || '—'}</div>
-                        {d.dns_provider?.name && d.dns_provider.name !== d.registrar_provider?.name && (
-                          <span style={{ fontSize: '9px', color: '#8c95a2' }}>DNS: {d.dns_provider.name}</span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      {d.monthly_cost ? (
-                        <strong style={{ color: '#1e293b' }}>${Number(d.monthly_cost).toFixed(2)}</strong>
-                      ) : (
-                        <span className="muted-cell">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {d.expires_at ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10px' }}>
-                          <Calendar size={12} color="#94a3b8" />
-                          {d.expires_at}
-                        </span>
-                      ) : (
-                        <span className="muted-cell">—</span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`status-pill ${d.status}`}>{statusLabels[d.status] || d.status}</span>
-                    </td>
-                    <td>
-                      <div className="row-actions">
-                        <button className="icon-button" title="Editar" onClick={() => openEdit(d)}>
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          className="icon-button danger-hover"
-                          title="Eliminar"
-                          onClick={() => remove(d)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <div className="table-footer">
-          <span>
-            Mostrando {filtered.length} de {domains.length} dominios
-          </span>
-          <span>Inventario manual</span>
-        </div>
-      </section>
-
-      {/* MODAL CREAR / EDITAR DOMINIO */}
+      {/* IN-PAGE FORM: CREAR / EDITAR DOMINIO (NO MODAL) */}
       {modalOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={e => {
-            if (e.target === e.currentTarget) setModalOpen(false)
-          }}
-        >
-          <form className="modal-card" onSubmit={save}>
-            <div className="modal-heading">
+        <section className="inpage-card" style={{ marginBottom: '22px' }}>
+          <form onSubmit={save}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
               <div>
                 <div className="eyebrow">DIRECCIONAMIENTO</div>
-                <h2>{editing ? 'Editar dominio' : 'Nuevo dominio'}</h2>
-                <p>Completá los datos del dominio y la IP a la que apunta.</p>
+                <h2 style={{ margin: '2px 0 0', fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>
+                  {editing ? 'Editar dominio' : 'Registrar nuevo dominio'}
+                </h2>
+                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  Completá los datos del dominio y la IP a la que apunta.
+                </p>
               </div>
               <button type="button" className="icon-button" onClick={() => setModalOpen(false)}>
                 <X size={19} />
@@ -613,9 +461,9 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
               </div>
             </div>
 
-            {error && <div className="alert error">{error}</div>}
+            {error && <div className="alert error" style={{ marginTop: '14px' }}>{error}</div>}
 
-            <div className="modal-actions">
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
               <button type="button" className="button secondary" onClick={() => setModalOpen(false)}>
                 Cancelar
               </button>
@@ -624,8 +472,161 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
               </button>
             </div>
           </form>
-        </div>
+        </section>
       )}
+
+      <section className="panel table-panel">
+        <div className="table-toolbar">
+          <div className="search-box">
+            <Search size={17} />
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Buscar por dominio, IP, servidor o notas…"
+            />
+          </div>
+          <div className="filter-wrap">
+            <Filter size={16} />
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+              <option value="all">Todos los estados</option>
+              {Object.entries(statusLabels).map(([val, label]) => (
+                <option key={val} value={val}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="table-empty">Cargando dominios…</div>
+        ) : filtered.length === 0 ? (
+          <div className="table-empty">
+            <div className="empty-icon">
+              <Globe2 size={22} />
+            </div>
+            <strong>{domains.length ? 'No hay resultados' : 'Todavía no registraste dominios'}</strong>
+            <span>{domains.length ? 'Probá cambiar la búsqueda.' : 'Agregá tu primer dominio y asócialo a una IP.'}</span>
+            {!domains.length && (
+              <button className="button secondary" onClick={openNew}>
+                <Plus size={16} /> Agregar dominio
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Dominio</th>
+                  <th>IP Asociada</th>
+                  <th>Servidor</th>
+                  <th>Registrador / DNS</th>
+                  <th>Costo / Mes</th>
+                  <th>Vencimiento</th>
+                  <th>Estado</th>
+                  <th>
+                    <span className="sr-only">Acciones</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(d => (
+                  <tr key={d.id}>
+                    <td>
+                      <div className="server-cell">
+                        <div className="server-table-icon">
+                          <Globe2 size={16} />
+                        </div>
+                        <div>
+                          <strong>{d.name}</strong>
+                          <span>{d.notes || (d.auto_renew ? 'Auto-renovación activa' : 'Renovación manual')}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      {d.target_ip ? (
+                        <div className="ip-address-cell" style={{ fontSize: '10px' }}>
+                          <span>{d.target_ip}</span>
+                          <button
+                            type="button"
+                            className={`copy-pill ${copiedIp === d.target_ip ? 'copied' : ''}`}
+                            onClick={() => copyToClipboard(d.target_ip!)}
+                            title="Copiar IP"
+                          >
+                            {copiedIp === d.target_ip ? <Check size={11} /> : <Copy size={11} />}
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="muted-cell">Sin IP asociada</span>
+                      )}
+                    </td>
+                    <td>
+                      {d.servers?.name ? (
+                        <span className="type-chip">
+                          <Server size={11} style={{ marginRight: '4px' }} />
+                          {d.servers.name}
+                        </span>
+                      ) : (
+                        <span className="muted-cell">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ fontSize: '10px' }}>
+                        <div>{d.registrar_provider?.name || '—'}</div>
+                        {d.dns_provider?.name && d.dns_provider.name !== d.registrar_provider?.name && (
+                          <span style={{ fontSize: '9px', color: '#8c95a2' }}>DNS: {d.dns_provider.name}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      {d.monthly_cost ? (
+                        <strong style={{ color: '#1e293b' }}>${Number(d.monthly_cost).toFixed(2)}</strong>
+                      ) : (
+                        <span className="muted-cell">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {d.expires_at ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10px' }}>
+                          <Calendar size={12} color="#94a3b8" />
+                          {d.expires_at}
+                        </span>
+                      ) : (
+                        <span className="muted-cell">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`status-pill ${d.status}`}>{statusLabels[d.status] || d.status}</span>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button className="icon-button" title="Editar" onClick={() => openEdit(d)}>
+                          <Edit2 size={15} />
+                        </button>
+                        <button
+                          className="icon-button danger-hover"
+                          title="Eliminar"
+                          onClick={() => remove(d)}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="table-footer">
+          <span>
+            Mostrando {filtered.length} de {domains.length} dominios
+          </span>
+          <span>Inventario manual</span>
+        </div>
+      </section>
     </div>
   )
 }

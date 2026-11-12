@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import type { Provider, ProviderType } from '../types'
 
 type FormState = {
@@ -44,6 +45,7 @@ const typeLabels: Record<ProviderType, string> = {
 }
 
 export default function Providers({ workspaceId }: { workspaceId: string }) {
+  useSetBreadcrumbs([{ label: 'Proveedores' }])
   const [providers, setProviders] = useState<Provider[]>([])
   const [serverCounts, setServerCounts] = useState<Record<string, number>>({})
   const [domainCounts, setDomainCounts] = useState<Record<string, number>>({})
@@ -235,6 +237,111 @@ export default function Providers({ workspaceId }: { workspaceId: string }) {
 
       {error && !modalOpen && <div className="alert error">{error}</div>}
 
+      {/* IN-PAGE FORM: CREAR / EDITAR PROVEEDOR (NO MODAL) */}
+      {modalOpen && (
+        <section className="inpage-card" style={{ marginBottom: '22px' }}>
+          <form onSubmit={save}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+              <div>
+                <div className="eyebrow">ORGANIZACIÓN</div>
+                <h2 style={{ margin: '2px 0 0', fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>
+                  {editing ? 'Editar proveedor' : 'Registrar nuevo proveedor'}
+                </h2>
+                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  Completá los datos del proveedor o registrador.
+                </p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setModalOpen(false)}>
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-field full">
+                <label>Nombre del proveedor *</label>
+                <input
+                  className="input"
+                  value={form.name}
+                  onChange={e => setForm(old => ({ ...old, name: e.target.value }))}
+                  placeholder="Ej. OVHcloud, Hetzner, Cloudflare, Donweb..."
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Tipo de proveedor</label>
+                <select
+                  className="input"
+                  value={form.provider_type}
+                  onChange={e => setForm(old => ({ ...old, provider_type: e.target.value as ProviderType }))}
+                >
+                  {Object.entries(typeLabels).map(([val, label]) => (
+                    <option key={val} value={val}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label>Datos de contacto / ID cliente</label>
+                <input
+                  className="input"
+                  value={form.contact_info}
+                  onChange={e => setForm(old => ({ ...old, contact_info: e.target.value }))}
+                  placeholder="Ej. NIC handle, email de soporte o ID de cliente"
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Sitio web</label>
+                <input
+                  className="input"
+                  type="url"
+                  value={form.website}
+                  onChange={e => setForm(old => ({ ...old, website: e.target.value }))}
+                  placeholder="https://www.proveedor.com"
+                />
+              </div>
+
+              <div className="form-field">
+                <label>URL de acceso al panel</label>
+                <input
+                  className="input"
+                  type="url"
+                  value={form.panel_url}
+                  onChange={e => setForm(old => ({ ...old, panel_url: e.target.value }))}
+                  placeholder="https://panel.proveedor.com"
+                />
+              </div>
+
+              <div className="form-field full">
+                <label>Notas adicionales</label>
+                <textarea
+                  className="input textarea"
+                  rows={3}
+                  value={form.notes}
+                  onChange={e => setForm(old => ({ ...old, notes: e.target.value }))}
+                  placeholder="Detalles sobre facturación, métodos de pago o soporte..."
+                />
+              </div>
+            </div>
+
+            {error && <div className="alert error" style={{ marginTop: '14px' }}>{error}</div>}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
+              <button type="button" className="button secondary" onClick={() => setModalOpen(false)}>
+                Cancelar
+              </button>
+              <button className="button primary" disabled={saving}>
+                {saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Registrar proveedor'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
       <section className="panel table-panel">
         <div className="table-toolbar">
           <div className="search-box">
@@ -381,112 +488,6 @@ export default function Providers({ workspaceId }: { workspaceId: string }) {
           <span>Inventario manual</span>
         </div>
       </section>
-
-      {/* MODAL CREAR / EDITAR PROVEEDOR */}
-      {modalOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={e => {
-            if (e.target === e.currentTarget) setModalOpen(false)
-          }}
-        >
-          <form className="modal-card" onSubmit={save}>
-            <div className="modal-heading">
-              <div>
-                <div className="eyebrow">ORGANIZACIÓN</div>
-                <h2>{editing ? 'Editar proveedor' : 'Nuevo proveedor'}</h2>
-                <p>Completá los datos del proveedor o registrador.</p>
-              </div>
-              <button type="button" className="icon-button" onClick={() => setModalOpen(false)}>
-                <X size={19} />
-              </button>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-field full">
-                <label>Nombre del proveedor *</label>
-                <input
-                  className="input"
-                  value={form.name}
-                  onChange={e => setForm(old => ({ ...old, name: e.target.value }))}
-                  placeholder="Ej. OVHcloud, Hetzner, Cloudflare, Donweb..."
-                  required
-                  autoFocus
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Tipo de proveedor</label>
-                <select
-                  className="input"
-                  value={form.provider_type}
-                  onChange={e => setForm(old => ({ ...old, provider_type: e.target.value as ProviderType }))}
-                >
-                  {Object.entries(typeLabels).map(([val, label]) => (
-                    <option key={val} value={val}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-field">
-                <label>Datos de contacto / ID cliente</label>
-                <input
-                  className="input"
-                  value={form.contact_info}
-                  onChange={e => setForm(old => ({ ...old, contact_info: e.target.value }))}
-                  placeholder="Ej. NIC handle, email de soporte o ID de cliente"
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Sitio web</label>
-                <input
-                  className="input"
-                  type="url"
-                  value={form.website}
-                  onChange={e => setForm(old => ({ ...old, website: e.target.value }))}
-                  placeholder="https://www.proveedor.com"
-                />
-              </div>
-
-              <div className="form-field">
-                <label>URL de acceso al panel</label>
-                <input
-                  className="input"
-                  type="url"
-                  value={form.panel_url}
-                  onChange={e => setForm(old => ({ ...old, panel_url: e.target.value }))}
-                  placeholder="https://panel.proveedor.com"
-                />
-              </div>
-
-              <div className="form-field full">
-                <label>Notas adicionales</label>
-                <textarea
-                  className="input textarea"
-                  rows={3}
-                  value={form.notes}
-                  onChange={e => setForm(old => ({ ...old, notes: e.target.value }))}
-                  placeholder="Detalles sobre facturación, métodos de pago o soporte..."
-                />
-              </div>
-            </div>
-
-            {error && <div className="alert error">{error}</div>}
-
-            <div className="modal-actions">
-              <button type="button" className="button secondary" onClick={() => setModalOpen(false)}>
-                Cancelar
-              </button>
-              <button className="button primary" disabled={saving}>
-                {saving ? 'Guardando…' : editing ? 'Guardar cambios' : 'Registrar proveedor'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </div>
   )
 }

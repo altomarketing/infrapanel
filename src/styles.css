@@ -38,3 +38,54 @@
 .ip-add-grid label{font-size:9px;color:#64748b;font-weight:600;margin-bottom:3px;display:block}
 .ip-add-grid .input{height:34px;font-size:10px}
 .ip-actions{display:flex;align-items:center;gap:3px;justify-content:flex-end}
+
+/* Dynamic Breadcrumbs & In-Page Navigation */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #64748b;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.breadcrumb-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.breadcrumb-sep {
+  color: #94a3b8;
+  font-weight: 700;
+  font-size: 11px;
+}
+.breadcrumb-link {
+  color: #3b82f6;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+.breadcrumb-link:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+.breadcrumb-current {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+/* In-Page Cards & Subforms (No floating modals) */
+.inpage-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+}
+.inpage-subform {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 18px 20px;
+  animation: fadeIn 0.2s ease-out;
+}

@@ -3,9 +3,12 @@ import type { Session, User } from '@supabase/supabase-js'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 import { ensureWorkspace } from './lib/workspace'
+import { BreadcrumbsProvider } from './lib/breadcrumbs'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Servers from './pages/Servers'
+import ServerDetail from './pages/ServerDetail'
+import ServerForm from './pages/ServerForm'
 import Providers from './pages/Providers'
 import Domains from './pages/Domains'
 import Networks from './pages/Networks'
@@ -49,14 +52,21 @@ export default function App() {
   if (workspaceError) return <div className="setup-screen"><div className="setup-card"><h2>No pudimos preparar tu espacio</h2><p>{workspaceError}</p><p className="muted">Verificá que el SQL de InfraPanel se haya ejecutado completo y que RLS esté activo.</p><button className="button secondary" onClick={() => window.location.reload()}>Reintentar</button></div></div>
   if (!workspaceId) return <div className="loading-screen"><div className="spinner" />Preparando tu espacio…</div>
 
-  return <Layout user={session.user} onSignOut={() => supabase?.auth.signOut()}>
-    <Routes>
-      <Route path="/" element={<Dashboard workspaceId={workspaceId} />} />
-      <Route path="/servers" element={<Servers workspaceId={workspaceId} />} />
-      <Route path="/providers" element={<Providers workspaceId={workspaceId} />} />
-      <Route path="/domains" element={<Domains workspaceId={workspaceId} />} />
-      <Route path="/networks" element={<Networks workspaceId={workspaceId} />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  </Layout>
+  return (
+    <BreadcrumbsProvider>
+      <Layout user={session.user} onSignOut={() => supabase?.auth.signOut()}>
+        <Routes>
+          <Route path="/" element={<Dashboard workspaceId={workspaceId} />} />
+          <Route path="/servers" element={<Servers workspaceId={workspaceId} />} />
+          <Route path="/servers/new" element={<ServerForm workspaceId={workspaceId} isNew />} />
+          <Route path="/servers/:serverId" element={<ServerDetail workspaceId={workspaceId} />} />
+          <Route path="/servers/:serverId/edit" element={<ServerForm workspaceId={workspaceId} />} />
+          <Route path="/providers" element={<Providers workspaceId={workspaceId} />} />
+          <Route path="/domains" element={<Domains workspaceId={workspaceId} />} />
+          <Route path="/networks" element={<Networks workspaceId={workspaceId} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
+    </BreadcrumbsProvider>
+  )
 }

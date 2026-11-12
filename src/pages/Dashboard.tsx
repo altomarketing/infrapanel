@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { ArrowUpRight, DollarSign, Globe2, Plus, Server, ServerCog, Tags, Wifi } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 
 export default function Dashboard({ workspaceId }: { workspaceId: string }) {
+  useSetBreadcrumbs([{ label: 'Dashboard' }])
   const [counts, setCounts] = useState({ servers: 0, providers: 0, domains: 0, networks: 0 })
   const [totalCost, setTotalCost] = useState(0)
   const [recent, setRecent] = useState<{ id: string; name: string; hostname: string | null; status: string; server_type: string; monthly_cost?: number | null }[]>([])
@@ -130,7 +132,7 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
           ) : (
             <div className="recent-list">
               {recent.map(server => (
-                <Link to="/servers" className="recent-row" key={server.id}>
+                <Link to={`/servers/${server.id}`} className="recent-row" key={server.id} title={`Ver detalle de ${server.name}`}>
                   <div className="server-mini-icon">
                     <Server size={17} />
                   </div>

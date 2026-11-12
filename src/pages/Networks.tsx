@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { lookupReverseDns } from '../lib/dns'
+import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import type { IPAddress, Network, Server as ServerRecord } from '../types'
 
 type IpFormState = {
@@ -61,6 +62,7 @@ const emptyNetForm: NetFormState = {
 }
 
 export default function Networks({ workspaceId }: { workspaceId: string }) {
+  useSetBreadcrumbs([{ label: 'Redes e IP' }])
   const [activeTab, setActiveTab] = useState<'ips' | 'networks'>('ips')
   const [ips, setIps] = useState<IPAddress[]>([])
   const [networks, setNetworks] = useState<Network[]>([])
@@ -414,6 +416,241 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
 
       {error && !ipModalOpen && !netModalOpen && <div className="alert error">{error}</div>}
 
+      {/* IN-PAGE FORM: CREAR / EDITAR IP (NO MODAL) */}
+      {ipModalOpen && (
+        <section className="inpage-card" style={{ marginBottom: '22px' }}>
+          <form onSubmit={saveIp}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+              <div>
+                <div className="eyebrow">IPAM</div>
+                <h2 style={{ margin: '2px 0 0', fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>
+                  {editingIp ? 'Editar dirección IP' : 'Registrar nueva IP'}
+                </h2>
+                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  Completá los datos de la dirección, reverse DNS y asignación.
+                </p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setIpModalOpen(false)}>
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-field full">
+                <label>Dirección IP o Bloque *</label>
+                <input
+                  className="input"
+                  value={ipForm.address}
+                  onChange={e => setIpForm(old => ({ ...old, address: e.target.value }))}
+                  onBlur={() => handleAutoResolveRdns(ipForm.address)}
+                  placeholder="Ej. 198.50.231.236"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Servidor asignado</label>
+                <select
+                  className="input"
+                  value={ipForm.server_id}
+                  onChange={e => setIpForm(old => ({ ...old, server_id: e.target.value }))}
+                >
+                  <option value="">Libre / Sin servidor asignado</option>
+                  {servers.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.hostname || s.server_type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label>Tipo de IP</label>
+                <select
+                  className="input"
+                  value={ipForm.ip_type}
+                  onChange={e => setIpForm(old => ({ ...old, ip_type: e.target.value as 'public' | 'private' }))}
+                >
+                  <option value="public">Pública</option>
+                  <option value="private">Privada</option>
+                </select>
+              </div>
+
+              <div className="form-field">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <label>Reverse DNS (PTR)</label>
+                  <button
+                    type="button"
+                    style={{ border: 0, background: 'none', color: '#2563eb', fontSize: '10px', cursor: 'pointer', padding: 0 }}
+                    onClick={() => handleAutoResolveRdns(ipForm.address)}
+                    disabled={resolvingRdns}
+                  >
+                    {resolvingRdns ? 'Consultando DNS…' : '🔍 Resolver PTR'}
+                  </button>
+                </div>
+                <input
+                  className="input"
+                  value={ipForm.purpose}
+                  onChange={e => setIpForm(old => ({ ...old, purpose: e.target.value }))}
+                  placeholder={resolvingRdns ? 'Buscando PTR automáticamente…' : 'server01.midominio.com'}
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Etiqueta / Uso</label>
+                <input
+                  className="input"
+                  value={ipForm.label}
+                  onChange={e => setIpForm(old => ({ ...old, label: e.target.value }))}
+                  placeholder="Failover, CWP, Principal..."
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Costo mensual ($)</label>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={ipForm.monthly_cost}
+                  onChange={e => setIpForm(old => ({ ...old, monthly_cost: e.target.value }))}
+                  placeholder="Ej. 3.00"
+                />
+              </div>
+
+              <div className="form-field full">
+                <label>Notas</label>
+                <textarea
+                  className="input textarea"
+                  rows={2}
+                  value={ipForm.notes}
+                  onChange={e => setIpForm(old => ({ ...old, notes: e.target.value }))}
+                  placeholder="Información adicional sobre enrutamiento o uso..."
+                />
+              </div>
+            </div>
+
+            {error && <div className="alert error" style={{ marginTop: '14px' }}>{error}</div>}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
+              <button type="button" className="button secondary" onClick={() => setIpModalOpen(false)}>
+                Cancelar
+              </button>
+              <button className="button primary" disabled={savingIp}>
+                {savingIp ? 'Guardando…' : editingIp ? 'Guardar cambios' : 'Registrar IP'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
+      {/* IN-PAGE FORM: CREAR / EDITAR SUBRED (NO MODAL) */}
+      {netModalOpen && (
+        <section className="inpage-card" style={{ marginBottom: '22px' }}>
+          <form onSubmit={saveNet}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+              <div>
+                <div className="eyebrow">SUBREDES</div>
+                <h2 style={{ margin: '2px 0 0', fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>
+                  {editingNet ? 'Editar Subred' : 'Crear Subred / Bloque'}
+                </h2>
+                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  Configurá un rango CIDR o red para tu inventario.
+                </p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setNetModalOpen(false)}>
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-field full">
+                <label>Nombre de la red / bloque *</label>
+                <input
+                  className="input"
+                  value={netForm.name}
+                  onChange={e => setNetForm(old => ({ ...old, name: e.target.value }))}
+                  placeholder="Ej. Bloque Failover Canadá o LAN Privada"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Bloque CIDR</label>
+                <input
+                  className="input"
+                  value={netForm.cidr}
+                  onChange={e => setNetForm(old => ({ ...old, cidr: e.target.value }))}
+                  placeholder="Ej. 198.51.100.0/29 o 10.0.0.0/24"
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Puerta de enlace (Gateway)</label>
+                <input
+                  className="input"
+                  value={netForm.gateway}
+                  onChange={e => setNetForm(old => ({ ...old, gateway: e.target.value }))}
+                  placeholder="Ej. 198.51.100.1"
+                />
+              </div>
+
+              <div className="form-field">
+                <label>Tipo de red</label>
+                <select
+                  className="input"
+                  value={netForm.network_type}
+                  onChange={e => setNetForm(old => ({ ...old, network_type: e.target.value }))}
+                >
+                  <option value="public">Pública / Failover</option>
+                  <option value="private">Privada / VPC</option>
+                  <option value="management">Gestión / IPMI</option>
+                  <option value="vlan">VLAN</option>
+                  <option value="vpn">VPN</option>
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label>Costo mensual ($)</label>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={netForm.monthly_cost}
+                  onChange={e => setNetForm(old => ({ ...old, monthly_cost: e.target.value }))}
+                  placeholder="Ej. 15.00"
+                />
+              </div>
+
+              <div className="form-field full">
+                <label>Descripción / Notas</label>
+                <input
+                  className="input"
+                  value={netForm.description}
+                  onChange={e => setNetForm(old => ({ ...old, description: e.target.value }))}
+                  placeholder="Detalles sobre el proveedor o destino del bloque..."
+                />
+              </div>
+            </div>
+
+            {error && <div className="alert error" style={{ marginTop: '14px' }}>{error}</div>}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
+              <button type="button" className="button secondary" onClick={() => setNetModalOpen(false)}>
+                Cancelar
+              </button>
+              <button className="button primary" disabled={savingNet}>
+                {savingNet ? 'Guardando…' : editingNet ? 'Guardar cambios' : 'Crear Subred'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '6px', borderBottom: '1px solid #e2e8f0', paddingBottom: '2px' }}>
         <button
@@ -694,243 +931,6 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
             <span>Inventario de Subredes</span>
           </div>
         </section>
-      )}
-
-      {/* MODAL CREAR / EDITAR IP */}
-      {ipModalOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={e => {
-            if (e.target === e.currentTarget) setIpModalOpen(false)
-          }}
-        >
-          <form className="modal-card" onSubmit={saveIp}>
-            <div className="modal-heading">
-              <div>
-                <div className="eyebrow">IPAM</div>
-                <h2>{editingIp ? 'Editar dirección IP' : 'Registrar nueva IP'}</h2>
-                <p>Completá los datos de la dirección, reverse DNS y asignación.</p>
-              </div>
-              <button type="button" className="icon-button" onClick={() => setIpModalOpen(false)}>
-                <X size={19} />
-              </button>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-field full">
-                <label>Dirección IP o Bloque *</label>
-                <input
-                  className="input"
-                  value={ipForm.address}
-                  onChange={e => setIpForm(old => ({ ...old, address: e.target.value }))}
-                  onBlur={() => handleAutoResolveRdns(ipForm.address)}
-                  placeholder="Ej. 198.50.231.236"
-                  required
-                  autoFocus
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Servidor asignado</label>
-                <select
-                  className="input"
-                  value={ipForm.server_id}
-                  onChange={e => setIpForm(old => ({ ...old, server_id: e.target.value }))}
-                >
-                  <option value="">Libre / Sin servidor asignado</option>
-                  {servers.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.hostname || s.server_type})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-field">
-                <label>Tipo de IP</label>
-                <select
-                  className="input"
-                  value={ipForm.ip_type}
-                  onChange={e => setIpForm(old => ({ ...old, ip_type: e.target.value as 'public' | 'private' }))}
-                >
-                  <option value="public">Pública</option>
-                  <option value="private">Privada</option>
-                </select>
-              </div>
-
-              <div className="form-field">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <label>Reverse DNS (PTR)</label>
-                  <button
-                    type="button"
-                    style={{ border: 0, background: 'none', color: '#2563eb', fontSize: '9px', cursor: 'pointer', padding: 0 }}
-                    onClick={() => handleAutoResolveRdns(ipForm.address)}
-                    disabled={resolvingRdns}
-                  >
-                    {resolvingRdns ? 'Consultando DNS…' : '🔍 Resolver PTR'}
-                  </button>
-                </div>
-                <input
-                  className="input"
-                  value={ipForm.purpose}
-                  onChange={e => setIpForm(old => ({ ...old, purpose: e.target.value }))}
-                  placeholder={resolvingRdns ? 'Buscando PTR automáticamente…' : 'server01.midominio.com'}
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Etiqueta / Uso</label>
-                <input
-                  className="input"
-                  value={ipForm.label}
-                  onChange={e => setIpForm(old => ({ ...old, label: e.target.value }))}
-                  placeholder="Failover, CWP, Principal..."
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Costo mensual ($)</label>
-                <input
-                  className="input"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={ipForm.monthly_cost}
-                  onChange={e => setIpForm(old => ({ ...old, monthly_cost: e.target.value }))}
-                  placeholder="Ej. 3.00"
-                />
-              </div>
-
-              <div className="form-field full">
-                <label>Notas</label>
-                <textarea
-                  className="input textarea"
-                  rows={2}
-                  value={ipForm.notes}
-                  onChange={e => setIpForm(old => ({ ...old, notes: e.target.value }))}
-                  placeholder="Información adicional sobre enrutamiento o uso..."
-                />
-              </div>
-            </div>
-
-            {error && <div className="alert error">{error}</div>}
-
-            <div className="modal-actions">
-              <button type="button" className="button secondary" onClick={() => setIpModalOpen(false)}>
-                Cancelar
-              </button>
-              <button className="button primary" disabled={savingIp}>
-                {savingIp ? 'Guardando…' : editingIp ? 'Guardar cambios' : 'Registrar IP'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* MODAL CREAR / EDITAR SUBRED */}
-      {netModalOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={e => {
-            if (e.target === e.currentTarget) setNetModalOpen(false)
-          }}
-        >
-          <form className="modal-card" onSubmit={saveNet}>
-            <div className="modal-heading">
-              <div>
-                <div className="eyebrow">SUBREDES</div>
-                <h2>{editingNet ? 'Editar Subred' : 'Crear Subred / Bloque'}</h2>
-                <p>Configurá un rango CIDR o red para tu inventario.</p>
-              </div>
-              <button type="button" className="icon-button" onClick={() => setNetModalOpen(false)}>
-                <X size={19} />
-              </button>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-field full">
-                <label>Nombre de la red / bloque *</label>
-                <input
-                  className="input"
-                  value={netForm.name}
-                  onChange={e => setNetForm(old => ({ ...old, name: e.target.value }))}
-                  placeholder="Ej. Bloque Failover Canadá o LAN Privada"
-                  required
-                  autoFocus
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Bloque CIDR</label>
-                <input
-                  className="input"
-                  value={netForm.cidr}
-                  onChange={e => setNetForm(old => ({ ...old, cidr: e.target.value }))}
-                  placeholder="Ej. 198.51.100.0/29 o 10.0.0.0/24"
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Puerta de enlace (Gateway)</label>
-                <input
-                  className="input"
-                  value={netForm.gateway}
-                  onChange={e => setNetForm(old => ({ ...old, gateway: e.target.value }))}
-                  placeholder="Ej. 198.51.100.1"
-                />
-              </div>
-
-              <div className="form-field">
-                <label>Tipo de red</label>
-                <select
-                  className="input"
-                  value={netForm.network_type}
-                  onChange={e => setNetForm(old => ({ ...old, network_type: e.target.value }))}
-                >
-                  <option value="public">Pública / Failover</option>
-                  <option value="private">Privada / VPC</option>
-                  <option value="management">Gestión / IPMI</option>
-                  <option value="vlan">VLAN</option>
-                  <option value="vpn">VPN</option>
-                </select>
-              </div>
-
-              <div className="form-field">
-                <label>Costo mensual ($)</label>
-                <input
-                  className="input"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={netForm.monthly_cost}
-                  onChange={e => setNetForm(old => ({ ...old, monthly_cost: e.target.value }))}
-                  placeholder="Ej. 15.00"
-                />
-              </div>
-
-              <div className="form-field full">
-                <label>Descripción / Notas</label>
-                <input
-                  className="input"
-                  value={netForm.description}
-                  onChange={e => setNetForm(old => ({ ...old, description: e.target.value }))}
-                  placeholder="Detalles sobre el proveedor o destino del bloque..."
-                />
-              </div>
-            </div>
-
-            {error && <div className="alert error">{error}</div>}
-
-            <div className="modal-actions">
-              <button type="button" className="button secondary" onClick={() => setNetModalOpen(false)}>
-                Cancelar
-              </button>
-              <button className="button primary" disabled={savingNet}>
-                {savingNet ? 'Guardando…' : editingNet ? 'Guardar cambios' : 'Crear Subred'}
-              </button>
-            </div>
-          </form>
-        </div>
       )}
     </div>
   )

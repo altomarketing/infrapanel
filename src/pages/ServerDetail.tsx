@@ -219,12 +219,14 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     try {
       const { data, error: vmErr } = await supabase!
         .from('servers')
-        .select('*, ip_addresses(id,address,purpose,reverse_dns)')
+        .select('*')
         .eq('parent_id', serverId)
         .eq('workspace_id', workspaceId)
         .order('name', { ascending: true })
 
-      if (!vmErr && data) {
+      if (vmErr) {
+        console.error('Error loading VMs:', vmErr)
+      } else if (data) {
         // Sort by vm_id numerically if available
         const sorted = (data as ServerRecord[]).sort((a, b) => {
           const numA = parseInt(String(a.vm_id || '999999'), 10)
@@ -233,8 +235,8 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
         })
         setVms(sorted)
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Catch loadVms:', err)
     }
     setLoadingVms(false)
   }, [serverId, workspaceId])
@@ -513,6 +515,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     }
 
     let importedCount = 0
+    let lastErr = ''
     for (const item of parsedList) {
       const payload: Record<string, unknown> = {
         workspace_id: workspaceId,
@@ -529,12 +532,20 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       }
 
       const { error: insErr } = await supabase!.from('servers').upsert(payload, { onConflict: 'workspace_id,name' })
-      if (!insErr) importedCount++
+      if (!insErr) {
+        importedCount++
+      } else {
+        lastErr = insErr.message
+      }
     }
 
-    setNotice(`Se sincronizaron ${importedCount} VPS de Proxmox correctamente.`)
-    setSyncImportText('')
-    setShowSyncProxmox(false)
+    if (importedCount > 0) {
+      setNotice(`Se sincronizaron ${importedCount} VPS de Proxmox correctamente.`)
+      setSyncImportText('')
+      setShowSyncProxmox(false)
+    } else if (lastErr) {
+      setError(`Error al sincronizar: ${lastErr}`)
+    }
     await loadVms()
     await loadIps()
     setImportingVms(false)

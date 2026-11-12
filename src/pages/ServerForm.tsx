@@ -346,8 +346,8 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
                     value={form.vm_type}
                     onChange={e => update('vm_type', e.target.value as 'qemu' | 'lxc')}
                   >
-                    <option value="qemu">QEMU / KVM</option>
-                    <option value="lxc">LXC Container</option>
+                    <option value="qemu">🖥️ QEMU / KVM (Máquina Virtual)</option>
+                    <option value="lxc">📦 LXC (Contenedor)</option>
                   </select>
                 </div>
 

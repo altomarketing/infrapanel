@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Boxes,
+  Container,
   Edit2,
   ExternalLink,
   Eye,
   Filter,
   Globe2,
   MapPin,
+  Monitor,
   Plus,
   Search,
   Server,
@@ -41,7 +43,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [roleFilter, setRoleFilter] = useState<'all' | 'hosts' | 'vps'>('all')
+  const [roleFilter, setRoleFilter] = useState<'all' | 'hosts' | 'vps' | 'kvm' | 'lxc'>('all')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -124,9 +126,13 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       const matchesStatus = statusFilter === 'all' || server.status === statusFilter
       const isHost = !server.parent_id && (server.server_type === 'dedicated' || server.server_type === 'physical')
       const isVps = Boolean(server.parent_id) || server.server_type === 'vps'
+      const isLxc = isVps && server.vm_type === 'lxc'
+      const isKvm = isVps && server.vm_type !== 'lxc'
 
       if (roleFilter === 'hosts' && !isHost) return false
       if (roleFilter === 'vps' && !isVps) return false
+      if (roleFilter === 'kvm' && !isKvm) return false
+      if (roleFilter === 'lxc' && !isLxc) return false
 
       const q = query.toLowerCase().trim()
       const matchesQuery =
@@ -143,6 +149,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const totals = useMemo(() => {
     const physicalHosts = servers.filter(s => !s.parent_id && (s.server_type === 'dedicated' || s.server_type === 'physical'))
     const virtualVps = servers.filter(s => Boolean(s.parent_id) || s.server_type === 'vps')
+    const kvmCount = servers.filter(s => (Boolean(s.parent_id) || s.server_type === 'vps') && s.vm_type !== 'lxc')
+    const lxcCount = servers.filter(s => (Boolean(s.parent_id) || s.server_type === 'vps') && s.vm_type === 'lxc')
     const active = servers.filter(s => s.status === 'active')
     const totalCost = servers.reduce((acc, s) => acc + (Number(s.monthly_cost) || 0), 0)
 
@@ -150,6 +158,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       all: servers.length,
       physicalHosts: physicalHosts.length,
       virtualVps: virtualVps.length,
+      kvmCount: kvmCount.length,
+      lxcCount: lxcCount.length,
       active: active.length,
       totalCost
     }
@@ -211,10 +221,12 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <div className="filter-wrap">
               <Boxes size={16} />
-              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value as 'all' | 'hosts' | 'vps')}>
+              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value as 'all' | 'hosts' | 'vps' | 'kvm' | 'lxc')}>
                 <option value="all">Todas las instancias ({servers.length})</option>
                 <option value="hosts">Solo Hipervisores Físicos ({totals.physicalHosts})</option>
-                <option value="vps">Solo VPS Virtuales ({totals.virtualVps})</option>
+                <option value="vps">Todos los VPS / Contenedores ({totals.virtualVps})</option>
+                <option value="kvm">Solo KVM - Máquinas Virtuales ({totals.kvmCount})</option>
+                <option value="lxc">Solo LXC - Contenedores ({totals.lxcCount})</option>
               </select>
             </div>
 
@@ -269,6 +281,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                   const childCount = vmCounts[server.id] || 0
                   const isHost = !server.parent_id && (server.server_type === 'dedicated' || server.server_type === 'physical')
                   const isVps = Boolean(server.parent_id) || server.server_type === 'vps'
+                  const isLxc = isVps && server.vm_type === 'lxc'
+                  const isKvm = isVps && server.vm_type !== 'lxc'
 
                   return (
                     <tr key={server.id}>
@@ -281,15 +295,40 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                           <div
                             className="server-table-icon"
                             style={{
-                              background: isVps ? '#f0fdf4' : '#eff6ff',
-                              color: isVps ? '#16a34a' : '#2563eb'
+                              background: !isVps ? '#eff6ff' : isLxc ? '#ecfeff' : '#f0fdf4',
+                              color: !isVps ? '#2563eb' : isLxc ? '#0891b2' : '#16a34a'
                             }}
+                            title={!isVps ? 'Servidor Dedicado / Host Proxmox' : isLxc ? 'Contenedor LXC' : 'Máquina Virtual KVM'}
                           >
-                            {isVps ? <Boxes size={17} /> : <Server size={17} />}
+                            {!isVps ? (
+                              <Server size={17} />
+                            ) : isLxc ? (
+                              <Container size={17} />
+                            ) : (
+                              <Monitor size={17} />
+                            )}
                           </div>
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <strong>{server.vm_id ? `[${server.vm_id}] ` : ''}{server.name}</strong>
+                              {isVps && (
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    padding: '1px 5px',
+                                    borderRadius: '4px',
+                                    background: isLxc ? '#e0f2fe' : '#dcfce7',
+                                    color: isLxc ? '#0369a1' : '#15803d',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px'
+                                  }}
+                                >
+                                  {isLxc ? <Container size={10} /> : <Monitor size={10} />}
+                                  {isLxc ? 'LXC' : 'KVM'}
+                                </span>
+                              )}
                               {server.role && (
                                 <span style={{ fontSize: '10px', background: '#f1f5f9', color: '#334155', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
                                   {server.role}
@@ -309,7 +348,17 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
 
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span className="type-chip">{typeNames[server.server_type] || server.server_type}</span>
+                          {isLxc ? (
+                            <span className="type-chip" style={{ background: '#ecfeff', color: '#0891b2', borderColor: '#a5f3fc', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                              <Container size={12} /> LXC
+                            </span>
+                          ) : isKvm ? (
+                            <span className="type-chip" style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                              <Monitor size={12} /> KVM
+                            </span>
+                          ) : (
+                            <span className="type-chip">{typeNames[server.server_type] || server.server_type}</span>
+                          )}
                           {isHost && childCount > 0 && (
                             <button
                               type="button"

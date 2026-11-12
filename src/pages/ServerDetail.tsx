@@ -6,12 +6,14 @@ import {
   Boxes,
   Check,
   ChevronRight,
+  Container,
   Copy,
   Edit2,
   ExternalLink,
   Globe2,
   Layers,
   MapPin,
+  Monitor,
   Plus,
   RefreshCw,
   Search,
@@ -118,6 +120,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
   // Filter IPs & VMs inside server
   const [ipQuery, setIpQuery] = useState('')
   const [vmQuery, setVmQuery] = useState('')
+  const [vmTypeFilter, setVmTypeFilter] = useState<'all' | 'qemu' | 'lxc'>('all')
 
   // Dynamic breadcrumbs
   useSetBreadcrumbs(
@@ -318,17 +321,40 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
   // Filtered VMs
   const filteredVms = useMemo(() => {
-    if (!vmQuery.trim()) return vms
-    const q = vmQuery.toLowerCase().trim()
-    return vms.filter(
-      v =>
+    return vms.filter(v => {
+      if (vmTypeFilter === 'qemu' && v.vm_type === 'lxc') return false
+      if (vmTypeFilter === 'lxc' && v.vm_type !== 'lxc') return false
+
+      if (!vmQuery.trim()) return true
+      const q = vmQuery.toLowerCase().trim()
+      return (
         v.name.toLowerCase().includes(q) ||
         (v.vm_id && String(v.vm_id).includes(q)) ||
         (v.hostname && v.hostname.toLowerCase().includes(q)) ||
         (v.role && v.role.toLowerCase().includes(q)) ||
         (v.operating_system && v.operating_system.toLowerCase().includes(q))
-    )
-  }, [vms, vmQuery])
+      )
+    })
+  }, [vms, vmQuery, vmTypeFilter])
+
+  const kvmCount = useMemo(() => vms.filter(v => v.vm_type !== 'lxc').length, [vms])
+  const lxcCount = useMemo(() => vms.filter(v => v.vm_type === 'lxc').length, [vms])
+
+  async function handleToggleVmType(vm: ServerRecord) {
+    const nextType: 'qemu' | 'lxc' = vm.vm_type === 'lxc' ? 'qemu' : 'lxc'
+    const label = nextType === 'lxc' ? 'Contenedor LXC' : 'Máquina KVM'
+    const { error: updErr } = await supabase!
+      .from('servers')
+      .update({ vm_type: nextType })
+      .eq('id', vm.id)
+
+    if (updErr) {
+      setError(updErr.message)
+    } else {
+      setVms(prev => prev.map(v => (v.id === vm.id ? { ...v, vm_type: nextType } : v)))
+      setNotice(`Se actualizó ${vm.name} a ${label}.`)
+    }
+  }
 
   // Copy IP helper
   function copyToClipboard(text: string) {
@@ -594,7 +620,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
   // Host Proxmox URL helper
   const proxmoxWebUrl = server.management_url || (server.hostname ? `https://${server.hostname}:8006` : null)
   const childProxmoxConsoleUrl = isChildVps && server.parent_server && server.vm_id
-    ? `https://${server.parent_server.name}:8006/#v1:0:=qemu/${server.vm_id}`
+    ? `https://${server.parent_server.name}:8006/#v1:0:=${server.vm_type === 'lxc' ? 'lxc' : 'qemu'}/${server.vm_id}`
     : proxmoxWebUrl
 
   return (
@@ -644,9 +670,9 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       {isChildVps && server.parent_server && (
         <div className="alert" style={{ background: '#f0f9ff', borderColor: '#bae6fd', color: '#0369a1', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Boxes size={18} />
+            {server.vm_type === 'lxc' ? <Container size={18} /> : <Monitor size={18} />}
             <span>
-              Este servidor es un <strong>VPS virtualizado</strong> alojado en el nodo físico <strong>{server.parent_server.name}</strong> (VM ID: {server.vm_id || '—'}).
+              Este servidor es un <strong>{server.vm_type === 'lxc' ? 'Contenedor LXC' : 'VPS KVM (QEMU)'}</strong> alojado en el nodo físico <strong>{server.parent_server.name}</strong> (VM ID: {server.vm_id || '—'}).
             </span>
           </div>
           <Link to={`/servers/${server.parent_id}`} className="text-link" style={{ fontWeight: 700, fontSize: '12px' }}>
@@ -659,8 +685,25 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       <section className="inpage-card" style={{ marginBottom: '22px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isChildVps ? '#f0fdf4' : '#eff6ff', color: isChildVps ? '#16a34a' : '#2563eb', display: 'grid', placeItems: 'center' }}>
-              {isChildVps ? <Boxes size={26} /> : <Server size={26} />}
+            <div
+              style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: '12px',
+                background: !isChildVps ? '#eff6ff' : server.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4',
+                color: !isChildVps ? '#2563eb' : server.vm_type === 'lxc' ? '#0891b2' : '#16a34a',
+                display: 'grid',
+                placeItems: 'center'
+              }}
+              title={!isChildVps ? 'Servidor Dedicado / Host Proxmox' : server.vm_type === 'lxc' ? 'Contenedor LXC' : 'Máquina Virtual KVM'}
+            >
+              {!isChildVps ? (
+                <Server size={26} />
+              ) : server.vm_type === 'lxc' ? (
+                <Container size={26} />
+              ) : (
+                <Monitor size={26} />
+              )}
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -684,8 +727,29 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
             <span className={`status-pill ${server.status}`}>
               {statusNames[server.status] || server.status}
             </span>
-            <span className="type-chip">
-              {isChildVps ? `VPS (${server.vm_type || 'QEMU'})` : typeNames[server.server_type] || server.server_type}
+            <span
+              className="type-chip"
+              style={
+                isChildVps
+                  ? server.vm_type === 'lxc'
+                    ? { background: '#ecfeff', color: '#0891b2', borderColor: '#a5f3fc', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 700 }
+                    : { background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 700 }
+                  : undefined
+              }
+            >
+              {isChildVps ? (
+                server.vm_type === 'lxc' ? (
+                  <>
+                    <Container size={13} /> Contenedor LXC
+                  </>
+                ) : (
+                  <>
+                    <Monitor size={13} /> Máquina KVM
+                  </>
+                )
+              ) : (
+                typeNames[server.server_type] || server.server_type
+              )}
             </span>
             {server.providers?.name && (
               <span className="type-chip">{server.providers.name}</span>
@@ -803,8 +867,8 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', gap: '12px', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div className="search-box" style={{ width: '240px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <div className="search-box" style={{ width: '220px' }}>
                 <Search size={15} />
                 <input
                   className="input"
@@ -813,6 +877,66 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                   placeholder="Buscar VM por nombre, ID, SO…"
                   style={{ height: '34px', fontSize: '12px' }}
                 />
+              </div>
+
+              <div style={{ display: 'inline-flex', gap: '4px', background: '#f1f5f9', padding: '3px', borderRadius: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setVmTypeFilter('all')}
+                  style={{
+                    border: 'none',
+                    background: vmTypeFilter === 'all' ? '#fff' : 'transparent',
+                    boxShadow: vmTypeFilter === 'all' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                    color: vmTypeFilter === 'all' ? '#0f172a' : '#64748b',
+                    fontWeight: 600,
+                    fontSize: '11px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Todos ({vms.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVmTypeFilter('qemu')}
+                  style={{
+                    border: 'none',
+                    background: vmTypeFilter === 'qemu' ? '#fff' : 'transparent',
+                    boxShadow: vmTypeFilter === 'qemu' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                    color: vmTypeFilter === 'qemu' ? '#16a34a' : '#64748b',
+                    fontWeight: 600,
+                    fontSize: '11px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <Monitor size={12} /> KVM ({kvmCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVmTypeFilter('lxc')}
+                  style={{
+                    border: 'none',
+                    background: vmTypeFilter === 'lxc' ? '#fff' : 'transparent',
+                    boxShadow: vmTypeFilter === 'lxc' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                    color: vmTypeFilter === 'lxc' ? '#0891b2' : '#64748b',
+                    fontWeight: 600,
+                    fontSize: '11px',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <Container size={12} /> LXC ({lxcCount})
+                </button>
               </div>
             </div>
 
@@ -845,7 +969,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                     Sincronización rápida con Proxmox VE
                   </h3>
                   <span style={{ fontSize: '12px', color: '#64748b' }}>
-                    Pegá la salida del comando <code>qm list</code> de tu Proxmox o el JSON de la API para importar/actualizar todas las VMs.
+                    Pegá la salida del comando <code>qm list</code> (KVM), <code>pct list</code> (LXC) o el JSON de la API de Proxmox para importar y sincronizar todas las instancias.
                   </span>
                 </div>
                 <button type="button" className="icon-button" onClick={() => setShowSyncProxmox(false)}>
@@ -1064,7 +1188,8 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                 <tbody>
                   {filteredVms.map(vm => {
                     const assignedIp = ips.find(ip => ip.assigned_vps_id === vm.id) || (vm.ip_addresses && vm.ip_addresses[0])
-                    const vmConsoleUrl = proxmoxWebUrl && vm.vm_id ? `${proxmoxWebUrl}/#v1:0:=qemu/${vm.vm_id}` : null
+                    const isLxc = vm.vm_type === 'lxc'
+                    const vmConsoleUrl = proxmoxWebUrl && vm.vm_id ? `${proxmoxWebUrl}/#v1:0:=${isLxc ? 'lxc' : 'qemu'}/${vm.vm_id}` : null
 
                     return (
                       <tr key={vm.id}>
@@ -1080,12 +1205,47 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                             onClick={() => navigate(`/servers/${vm.id}`)}
                             title="Ver ficha completa de este VPS"
                           >
-                            <div className="server-table-icon" style={{ background: '#f0fdf4', color: '#16a34a' }}>
-                              <Boxes size={16} />
+                            <div
+                              className="server-table-icon"
+                              style={{
+                                background: isLxc ? '#ecfeff' : '#f0fdf4',
+                                color: isLxc ? '#0891b2' : '#16a34a'
+                              }}
+                              title={isLxc ? 'Contenedor LXC' : 'Máquina Virtual KVM'}
+                            >
+                              {isLxc ? <Container size={16} /> : <Monitor size={16} />}
                             </div>
                             <div>
-                              <strong>{vm.name}</strong>
-                              <span>{vm.vm_type === 'lxc' ? 'Contenedor LXC' : 'Máquina KVM'}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <strong>{vm.name}</strong>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleToggleVmType(vm)
+                                  }}
+                                  title="Clic para cambiar entre KVM y LXC"
+                                  style={{
+                                    border: `1px solid ${isLxc ? '#a5f3fc' : '#bbf7d0'}`,
+                                    background: isLxc ? '#ecfeff' : '#f0fdf4',
+                                    color: isLxc ? '#0891b2' : '#16a34a',
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px'
+                                  }}
+                                >
+                                  {isLxc ? <Container size={10} /> : <Monitor size={10} />}
+                                  {isLxc ? 'LXC' : 'KVM'}
+                                </button>
+                              </div>
+                              <span style={{ fontSize: '11px', color: '#64748b' }}>
+                                {isLxc ? 'Contenedor LXC' : 'Máquina Virtual QEMU/KVM'}
+                              </span>
                             </div>
                           </div>
                         </td>
@@ -1458,11 +1618,22 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                             ) : assignedVm ? (
                               <Link
                                 to={`/servers/${assignedVm.id}`}
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 600, color: '#16a34a', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '2px 8px', borderRadius: '6px' }}
-                                title="Ver ficha del VPS"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  color: assignedVm.vm_type === 'lxc' ? '#0891b2' : '#16a34a',
+                                  background: assignedVm.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4',
+                                  border: `1px solid ${assignedVm.vm_type === 'lxc' ? '#a5f3fc' : '#bbf7d0'}`,
+                                  padding: '2px 8px',
+                                  borderRadius: '6px'
+                                }}
+                                title={assignedVm.vm_type === 'lxc' ? 'Ver ficha del contenedor LXC' : 'Ver ficha de la máquina KVM'}
                               >
-                                <Boxes size={12} />
-                                VM {assignedVm.vm_id || ''}: {assignedVm.name}
+                                {assignedVm.vm_type === 'lxc' ? <Container size={12} /> : <Monitor size={12} />}
+                                {assignedVm.vm_type === 'lxc' ? 'LXC' : 'KVM'} {assignedVm.vm_id ? `[${assignedVm.vm_id}] ` : ''}{assignedVm.name}
                               </Link>
                             ) : (
                               <span className="muted-cell">Host base</span>

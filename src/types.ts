@@ -64,7 +64,7 @@ export interface IPAddress {
   created_at: string
   updated_at?: string
   servers?: { name: string; hostname: string | null } | null
-  assigned_vps?: { id: string; name: string; vm_id?: number | string | null } | null
+  assigned_vps?: { id: string; name: string; vm_id?: number | string | null; vm_type?: 'qemu' | 'lxc' | null } | null
 }
 
 export interface Network {

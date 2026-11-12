@@ -1,5 +1,6 @@
 export type ServerStatus = 'active' | 'maintenance' | 'inactive' | 'decommissioned'
 export type ServerType = 'vps' | 'dedicated' | 'physical' | 'cloud' | 'virtual_machine' | 'other'
+
 export interface Server {
   id: string
   workspace_id: string
@@ -21,4 +22,22 @@ export interface Server {
   updated_at: string
   providers?: { name: string } | null
 }
-export interface Provider { id: string; name: string }
+
+export interface Provider {
+  id: string
+  name: string
+}
+
+export interface IPAddress {
+  id: string
+  workspace_id: string
+  server_id: string | null
+  address: string
+  ip_type: 'public' | 'private' | 'management' | 'loopback' | 'other'
+  network_id?: string | null
+  label: string | null
+  purpose: string | null // Reverse DNS (PTR)
+  notes: string | null
+  created_at: string
+  updated_at?: string
+}

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Activity, ChevronDown, CircleHelp, Command, Globe2, LayoutDashboard, LogOut, Menu, Network, Search, Server, Settings, ShieldCheck, Tags, X, Boxes } from 'lucide-react'
+import { Activity, ChevronDown, Command, Globe2, LayoutDashboard, LogOut, Menu, Network, Search, Server, Settings, ShieldCheck, Tags, X, Boxes } from 'lucide-react'
 import type { User } from '@supabase/supabase-js'
 import type { LucideIcon } from 'lucide-react'
 import { useBreadcrumbs } from '../lib/breadcrumbs'
@@ -65,13 +65,6 @@ export default function Layout({ children, user, onSignOut }: { children: ReactN
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="help-card">
-            <div className="help-icon">
-              <CircleHelp size={17} />
-            </div>
-            <strong>¿Necesitás ayuda?</strong>
-            <span>Tu infraestructura, organizada en un solo lugar.</span>
-          </div>
           <div className="profile-row">
             <div className="profile-avatar">{initials}</div>
             <div className="profile-info">

@@ -68,7 +68,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
 
   // Filters
   const [query, setQuery] = useState('')
-  const [ipFilter, setIpFilter] = useState<'all' | 'assigned' | 'free' | 'ipv4' | 'ipv6' | 'public' | 'private'>('all')
+  const [ipFilter, setIpFilter] = useState<'all' | 'assigned' | 'free' | 'public' | 'private'>('all')
 
   // IP Modal
   const [ipModalOpen, setIpModalOpen] = useState(false)
@@ -102,7 +102,8 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     if (ipRes.error) {
       setError(ipRes.error.message)
     } else {
-      setIps((ipRes.data || []) as IPAddress[])
+      const onlyIpv4 = ((ipRes.data || []) as IPAddress[]).filter(ip => !ip.address.includes(':'))
+      setIps(onlyIpv4)
     }
 
     if (!netRes.error) {
@@ -120,22 +121,21 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     load()
   }, [load])
 
-  // Filtered IPs
+  // Filtered IPs (Always hide IPv6)
   const filteredIps = useMemo(() => {
-    return ips.filter(ip => {
-      const isIpv6 = ip.address.includes(':')
-      const matchesFilter =
-        ipFilter === 'all' ||
-        (ipFilter === 'assigned' && Boolean(ip.server_id)) ||
-        (ipFilter === 'free' && !ip.server_id) ||
-        (ipFilter === 'ipv4' && !isIpv6) ||
-        (ipFilter === 'ipv6' && isIpv6) ||
-        (ipFilter === 'public' && ip.ip_type === 'public') ||
-        (ipFilter === 'private' && ip.ip_type === 'private')
+    return ips
+      .filter(ip => !ip.address.includes(':'))
+      .filter(ip => {
+        const matchesFilter =
+          ipFilter === 'all' ||
+          (ipFilter === 'assigned' && Boolean(ip.server_id)) ||
+          (ipFilter === 'free' && !ip.server_id) ||
+          (ipFilter === 'public' && ip.ip_type === 'public') ||
+          (ipFilter === 'private' && ip.ip_type === 'private')
 
-      const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''}`.toLowerCase()
-      return matchesFilter && text.includes(query.toLowerCase())
-    })
+        const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''}`.toLowerCase()
+        return matchesFilter && text.includes(query.toLowerCase())
+      })
   }, [ips, ipFilter, query])
 
   // Filtered Networks
@@ -441,8 +441,6 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                 <option value="free">Libres / Sin Asignar ({freeCount})</option>
                 <option value="public">Solo Públicas</option>
                 <option value="private">Solo Privadas</option>
-                <option value="ipv4">IPv4</option>
-                <option value="ipv6">IPv6</option>
               </select>
             </div>
           </div>
@@ -468,7 +466,6 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                 <thead>
                   <tr>
                     <th>Dirección IP / Bloque</th>
-                    <th>Versión</th>
                     <th>Tipo</th>
                     <th>Reverse DNS (PTR)</th>
                     <th>Servidor Asignado</th>
@@ -480,33 +477,26 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredIps.map(ip => {
-                    const isIpv6 = ip.address.includes(':')
-                    return (
-                      <tr key={ip.id}>
-                        <td>
-                          <div className="ip-address-cell">
-                            <span>{ip.address}</span>
-                            <button
-                              type="button"
-                              className={`copy-pill ${copiedIp === ip.address ? 'copied' : ''}`}
-                              onClick={() => copyToClipboard(ip.address)}
-                              title="Copiar IP al portapapeles"
-                            >
-                              {copiedIp === ip.address ? <Check size={11} /> : <Copy size={11} />}
-                            </button>
-                          </div>
-                        </td>
-                        <td>
-                          <span className="type-chip" style={{ fontSize: '9px', fontWeight: 700 }}>
-                            {isIpv6 ? 'IPv6' : 'IPv4'}
-                          </span>
-                        </td>
-                        <td>
-                          <span className="type-chip">
-                            {ip.ip_type === 'public' ? 'Pública' : 'Privada'}
-                          </span>
-                        </td>
+                  {filteredIps.map(ip => (
+                    <tr key={ip.id}>
+                      <td>
+                        <div className="ip-address-cell">
+                          <span>{ip.address}</span>
+                          <button
+                            type="button"
+                            className={`copy-pill ${copiedIp === ip.address ? 'copied' : ''}`}
+                            onClick={() => copyToClipboard(ip.address)}
+                            title="Copiar IP al portapapeles"
+                          >
+                            {copiedIp === ip.address ? <Check size={11} /> : <Copy size={11} />}
+                          </button>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="type-chip">
+                          {ip.ip_type === 'public' ? 'Pública' : 'Privada'}
+                        </span>
+                      </td>
                         <td>
                           {ip.purpose ? (
                             <span className="rdns-tag">
@@ -553,8 +543,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                           </div>
                         </td>
                       </tr>
-                    )
-                  })}
+                    ))}
                 </tbody>
               </table>
             </div>

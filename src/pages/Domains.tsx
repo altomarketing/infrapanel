@@ -95,7 +95,10 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
 
     if (!provRes.error) setProviders((provRes.data || []) as Provider[])
     if (!srvRes.error) setServers((srvRes.data || []) as ServerRecord[])
-    if (!ipRes.error) setAvailableIps((ipRes.data || []) as IPAddress[])
+    if (!ipRes.error) {
+      const onlyIpv4 = ((ipRes.data || []) as IPAddress[]).filter(ip => !ip.address.includes(':'))
+      setAvailableIps(onlyIpv4)
+    }
 
     setLoading(false)
   }, [workspaceId])

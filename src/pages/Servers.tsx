@@ -119,7 +119,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     const [serverResult, providerResult, ipCountResult] = await Promise.all([
       supabase!.from('servers').select('*, providers(name)').eq('workspace_id', workspaceId).order('created_at', { ascending: false }),
       supabase!.from('providers').select('*').eq('workspace_id', workspaceId).order('name'),
-      supabase!.from('ip_addresses').select('server_id').eq('workspace_id', workspaceId).not('server_id', 'is', null)
+      supabase!.from('ip_addresses').select('server_id, address').eq('workspace_id', workspaceId).not('server_id', 'is', null)
     ])
 
     if (serverResult.error) {
@@ -135,7 +135,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     if (ipCountResult.data) {
       const counts: Record<string, number> = {}
       for (const row of ipCountResult.data) {
-        if (row.server_id) {
+        if (row.server_id && !row.address?.includes(':')) {
           counts[row.server_id] = (counts[row.server_id] || 0) + 1
         }
       }
@@ -162,7 +162,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
     if (ipErr) {
       setError(ipErr.message)
     } else {
-      setDetailIps((data || []) as IPAddress[])
+      const onlyIpv4 = ((data || []) as IPAddress[]).filter(ip => !ip.address.includes(':'))
+      setDetailIps(onlyIpv4)
     }
     setLoadingIps(false)
   }, [workspaceId])

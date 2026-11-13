@@ -6,7 +6,6 @@ import {
   Copy,
   DollarSign,
   Edit2,
-  Filter,
   Globe2,
   Monitor,
   Network as NetworkIcon,
@@ -419,42 +418,83 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
         </div>
       </div>
 
-      <div className="server-summary">
-        <div>
-          <span className="summary-icon">
-            <Radio size={18} />
-          </span>
-          <div>
-            <strong>{ips.length}</strong>
-            <span>Total direcciones IP</span>
+      <div className="stats-grid">
+        <div
+          className="stat-card"
+          onClick={() => setIpFilter('all')}
+          style={{
+            cursor: 'pointer',
+            border: ipFilter === 'all' ? '2px solid #2563eb' : '1px solid #e2e8f0',
+            background: ipFilter === 'all' ? '#eff6ff' : '#fff',
+            boxShadow: ipFilter === 'all' ? '0 4px 12px rgba(37, 99, 235, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title={ipFilter === 'all' ? 'Mostrando todas las IPs' : 'Clic para ver todas las IPs'}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">Total Direcciones IP</div>
+            <Radio size={18} style={{ color: ipFilter === 'all' ? '#2563eb' : '#64748b' }} />
+          </div>
+          <div className="stat-value" style={{ color: '#2563eb' }}>{ips.length}</div>
+          <div className="stat-caption" style={{ color: ipFilter === 'all' ? '#1d4ed8' : undefined, fontWeight: ipFilter === 'all' ? 700 : 400 }}>
+            {ipFilter === 'all' ? '✓ Mostrando todas las IPs' : 'Inventario IPv4 (clic para ver todas)'}
           </div>
         </div>
-        <div>
-          <span className="summary-icon green">
-            <Server size={18} />
-          </span>
-          <div>
-            <strong>{assignedCount}</strong>
-            <span>IPs asignadas a servidores</span>
+
+        <div
+          className="stat-card"
+          onClick={() => setIpFilter(old => (old === 'assigned' ? 'all' : 'assigned'))}
+          style={{
+            cursor: 'pointer',
+            border: ipFilter === 'assigned' ? '2px solid #16a34a' : '1px solid #e2e8f0',
+            background: ipFilter === 'assigned' ? '#f0fdf4' : '#fff',
+            boxShadow: ipFilter === 'assigned' ? '0 4px 12px rgba(22, 163, 74, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title={ipFilter === 'assigned' ? 'Filtro activo: mostrando solo IPs asignadas. Clic para mostrar todas.' : 'Clic para filtrar y ver solo IPs asignadas'}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">IPs Asignadas</div>
+            <Server size={18} style={{ color: '#16a34a' }} />
+          </div>
+          <div className="stat-value" style={{ color: '#16a34a' }}>{assignedCount}</div>
+          <div className="stat-caption" style={{ color: ipFilter === 'assigned' ? '#15803d' : undefined, fontWeight: ipFilter === 'assigned' ? 700 : 400 }}>
+            {ipFilter === 'assigned' ? '✓ Filtrando asignadas (clic para quitar)' : 'Ruteadas a Host o VPS (clic para filtrar)'}
           </div>
         </div>
-        <div>
-          <span className="summary-icon orange">
-            <Wifi size={18} />
-          </span>
-          <div>
-            <strong>{freeCount}</strong>
-            <span>IPs libres / disponibles</span>
+
+        <div
+          className="stat-card"
+          onClick={() => setIpFilter(old => (old === 'free' ? 'all' : 'free'))}
+          style={{
+            cursor: 'pointer',
+            border: ipFilter === 'free' ? '2px solid #f59e0b' : '1px solid #e2e8f0',
+            background: ipFilter === 'free' ? '#fffbeb' : '#fff',
+            boxShadow: ipFilter === 'free' ? '0 4px 12px rgba(245, 158, 11, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title={ipFilter === 'free' ? 'Filtro activo: mostrando solo IPs libres. Clic para mostrar todas.' : 'Clic para filtrar y ver solo IPs libres'}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">IPs Libres / Disponibles</div>
+            <Wifi size={18} style={{ color: '#f59e0b' }} />
+          </div>
+          <div className="stat-value" style={{ color: '#f59e0b' }}>{freeCount}</div>
+          <div className="stat-caption" style={{ color: ipFilter === 'free' ? '#b45309' : undefined, fontWeight: ipFilter === 'free' ? 700 : 400 }}>
+            {ipFilter === 'free' ? '✓ Filtrando libres (clic para quitar)' : 'Sin servidor asignado (clic para filtrar)'}
           </div>
         </div>
-        <div>
-          <span className="summary-icon" style={{ background: '#f0fdf4', color: '#16a34a' }}>
-            <DollarSign size={18} />
-          </span>
-          <div>
-            <strong>${totalIpCost.toFixed(2)}</strong>
-            <span>Costo mensual en IPs</span>
+
+        <div className="stat-card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">Costo Mensual en IPs</div>
+            <DollarSign size={18} style={{ color: '#16a34a' }} />
           </div>
+          <div className="stat-value" style={{ color: '#0f172a' }}>${totalIpCost.toFixed(2)}</div>
+          <div className="stat-caption">USD / mes en IPs adicionales</div>
         </div>
       </div>
 
@@ -777,19 +817,29 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                 placeholder="Buscar por IP, Reverse DNS, servidor o etiqueta…"
               />
             </div>
-            <div className="filter-wrap">
-              <Filter size={16} />
-              <select
-                value={ipFilter}
-                onChange={e => setIpFilter(e.target.value as any)}
+
+            {ipFilter !== 'all' && (
+              <button
+                type="button"
+                className="button secondary"
+                style={{
+                  height: '34px',
+                  fontSize: '11px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: ipFilter === 'assigned' ? '#f0fdf4' : ipFilter === 'free' ? '#fffbeb' : '#f0f9ff',
+                  borderColor: ipFilter === 'assigned' ? '#bbf7d0' : ipFilter === 'free' ? '#fef3c7' : '#bae6fd',
+                  color: ipFilter === 'assigned' ? '#15803d' : ipFilter === 'free' ? '#b45309' : '#0369a1',
+                  fontWeight: 600
+                }}
+                onClick={() => setIpFilter('all')}
+                title="Quitar filtro y ver todas las IPs"
               >
-                <option value="all">Todas las IPs ({ips.length})</option>
-                <option value="assigned">Asignadas a Servidor ({assignedCount})</option>
-                <option value="free">Libres / Sin Asignar ({freeCount})</option>
-                <option value="public">Solo Públicas</option>
-                <option value="private">Solo Privadas</option>
-              </select>
-            </div>
+                <span>Filtro activo: <strong>{ipFilter === 'assigned' ? 'Solo IPs Asignadas' : 'Solo IPs Libres / Disponibles'}</strong></span>
+                <X size={13} />
+              </button>
+            )}
           </div>
 
           {loading ? (

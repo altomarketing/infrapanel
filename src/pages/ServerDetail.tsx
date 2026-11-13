@@ -23,7 +23,7 @@ import {
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { lookupReverseDns } from '../lib/dns'
+import { lookupReverseDns, expandCidrIpv4 } from '../lib/dns'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import { parseQmListOutput, parseProxmoxApiResponse } from '../lib/proxmox'
 import type { IPAddress, Server as ServerRecord, Domain } from '../types'
@@ -198,33 +198,61 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
     const parentId = srvData?.parent_id
 
-    let query = supabase!
-      .from('ip_addresses')
-      .select('*')
-      .eq('workspace_id', workspaceId)
+    let ipList: IPAddress[] = []
 
     if (parentId) {
       // For child VPS, show IPs assigned to this VPS or having server_id = serverId
-      query = query.or(`assigned_vps_id.eq.${serverId},server_id.eq.${serverId}`)
-    } else {
-      query = query.eq('server_id', serverId)
-    }
+      const { data, error: ipErr } = await supabase!
+        .from('ip_addresses')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .or(`assigned_vps_id.eq.${serverId},server_id.eq.${serverId}`)
+        .order('address', { ascending: true })
 
-    const { data, error: ipErr } = await query.order('address', { ascending: true })
-
-    if (ipErr) {
-      const fallbackQuery = parentId
-        ? supabase!.from('ip_addresses').select('*').eq('workspace_id', workspaceId).or(`assigned_vps_id.eq.${serverId},server_id.eq.${serverId}`)
-        : supabase!.from('ip_addresses').select('*').eq('workspace_id', workspaceId).eq('server_id', serverId)
-
-      const fallback = await fallbackQuery.order('address', { ascending: true })
-      if (fallback.data) {
-        setIps(fallback.data.filter(ip => !ip.address.includes(':')))
+      if (!ipErr && data) {
+        ipList = data as IPAddress[]
       }
     } else {
-      const ipv4Only = (data || []).filter(ip => !ip.address.includes(':'))
-      setIps(ipv4Only as IPAddress[])
+      // For physical host: load direct IPs and also any IPs assigned to child VMs
+      const { data: directIps } = await supabase!
+        .from('ip_addresses')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .eq('server_id', serverId)
+        .order('address', { ascending: true })
+
+      const { data: hostVms } = await supabase!
+        .from('servers')
+        .select('id')
+        .eq('parent_id', serverId)
+
+      const vmIds = (hostVms || []).map(v => v.id)
+      let vpsIps: any[] = []
+      if (vmIds.length > 0) {
+        const { data: vData } = await supabase!
+          .from('ip_addresses')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .in('assigned_vps_id', vmIds)
+        vpsIps = vData || []
+      }
+
+      const map = new Map<string, IPAddress>()
+      for (const ip of directIps || []) map.set(ip.id, ip as IPAddress)
+      for (const ip of vpsIps) {
+        map.set(ip.id, ip as IPAddress)
+        if (ip.server_id !== serverId) {
+          // Normalize server_id to point to physical host
+          supabase!.from('ip_addresses').update({ server_id: serverId }).eq('id', ip.id).then()
+        }
+      }
+      ipList = Array.from(map.values())
     }
+
+    const ipv4Only = ipList
+      .filter(ip => !ip.address.includes(':'))
+      .sort((a, b) => a.address.localeCompare(b.address, undefined, { numeric: true }))
+    setIps(ipv4Only)
 
     // If child VPS, also load parent server IPs to allow quick association
     if (parentId) {
@@ -1377,13 +1405,33 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                                 <X size={13} />
                               </button>
                             </div>
+                          ) : ips.length === 0 ? (
+                            <button
+                              type="button"
+                              className="button small outline"
+                              style={{ height: '28px', fontSize: '11px', padding: '0 8px', color: '#2563eb', borderColor: '#bfdbfe', background: '#eff6ff', whiteSpace: 'nowrap' }}
+                              title="Cargar IP failover en este servidor para asignarla a este VPS"
+                              onClick={() => {
+                                setNewIpAssignedVm(vm.id)
+                                setShowAddIp(true)
+                                setActiveTab('ips')
+                              }}
+                            >
+                              + Cargar IP failover
+                            </button>
                           ) : (
                             <select
                               className="input"
                               style={{ height: '28px', fontSize: '11px', padding: '0 6px', maxWidth: '175px', color: '#2563eb', borderColor: '#bfdbfe', background: '#eff6ff' }}
                               value=""
                               onChange={e => {
-                                if (e.target.value) handleQuickAssignIp(e.target.value, vm.id)
+                                if (e.target.value === '__NEW__') {
+                                  setNewIpAssignedVm(vm.id)
+                                  setShowAddIp(true)
+                                  setActiveTab('ips')
+                                } else if (e.target.value) {
+                                  handleQuickAssignIp(e.target.value, vm.id)
+                                }
                               }}
                             >
                               <option value="" disabled>+ Asociar IP failover…</option>
@@ -1394,6 +1442,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                                     {ip.address} {ip.reverse_dns ? `(${ip.reverse_dns})` : ''}
                                   </option>
                                 ))}
+                              <option value="__NEW__">➕ Cargar nueva IP failover…</option>
                             </select>
                           )}
                         </td>
@@ -1578,11 +1627,45 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                   <input
                     className="input"
                     required
-                    placeholder="ej. 198.50.231.236"
+                    placeholder="ej. 198.50.231.236 o 66.70.129.32/29"
                     value={newIpAddress}
                     onChange={e => setNewIpAddress(e.target.value)}
                     onBlur={e => triggerDohLookup(e.target.value)}
                   />
+                  {newIpAddress.includes('/') && expandCidrIpv4(newIpAddress).length > 1 && (
+                    <div style={{ marginTop: '6px', fontSize: '11px', color: '#2563eb', background: '#eff6ff', padding: '6px 8px', borderRadius: '4px', border: '1px solid #bfdbfe' }}>
+                      💡 Bloque CIDR detectado ({expandCidrIpv4(newIpAddress).length} IPs).
+                      <button
+                        type="button"
+                        style={{ marginLeft: '6px', background: 'none', border: 'none', textDecoration: 'underline', color: '#1d4ed8', cursor: 'pointer', fontWeight: 600 }}
+                        onClick={async () => {
+                          const expanded = expandCidrIpv4(newIpAddress)
+                          setSavingIp(true)
+                          const hostServerId = isChildVps && server?.parent_id ? server.parent_id : serverId
+                          for (let i = 0; i < expanded.length; i++) {
+                            const ipStr = expanded[i]
+                            const rdnsStr = await lookupReverseDns(ipStr)
+                            await supabase!.from('ip_addresses').insert({
+                              workspace_id: workspaceId,
+                              server_id: hostServerId,
+                              assigned_vps_id: i === 0 ? (newIpAssignedVm || null) : null,
+                              address: ipStr,
+                              ip_type: newIpType,
+                              purpose: rdnsStr || null,
+                              reverse_dns: rdnsStr || null
+                            })
+                          }
+                          setSavingIp(false)
+                          setShowAddIp(false)
+                          setNotice(`Se desglosaron y crearon ${expanded.length} IPs individuales para este nodo.`)
+                          await loadIps()
+                          await loadVms()
+                        }}
+                      >
+                        Desglosar en {expandCidrIpv4(newIpAddress).length} IPs utilizables
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div>

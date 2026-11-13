@@ -203,10 +203,20 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
 
   function openEditIp(ip: IPAddress) {
     setEditingIp(ip)
+    let srvId = ip.server_id || ''
+    let vpsId = ip.assigned_vps_id || ''
+
+    // Normalizar si la IP tenía asignado como server_id un VPS (por el selector plano anterior)
+    const targetSrv = servers.find(s => s.id === srvId)
+    if (targetSrv && targetSrv.parent_id) {
+      vpsId = targetSrv.id
+      srvId = targetSrv.parent_id
+    }
+
     setIpForm({
       address: ip.address,
-      server_id: ip.server_id || '',
-      assigned_vps_id: ip.assigned_vps_id || '',
+      server_id: srvId,
+      assigned_vps_id: vpsId,
       ip_type: ip.ip_type === 'private' ? 'private' : 'public',
       purpose: ip.purpose || '',
       label: ip.label || '',
@@ -228,11 +238,22 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
       if (autoHost) purpose = autoHost
     }
 
+    let srvId = ipForm.server_id || null
+    let vpsId = ipForm.assigned_vps_id || null
+
+    // Si se asignó un VPS pero no se eligió server_id, inferir el host físico desde el VPS
+    if (vpsId && !srvId) {
+      const vpsObj = servers.find(s => s.id === vpsId)
+      if (vpsObj && vpsObj.parent_id) {
+        srvId = vpsObj.parent_id
+      }
+    }
+
     const payload: Record<string, unknown> = {
       workspace_id: workspaceId,
       address: ipForm.address.trim(),
-      server_id: ipForm.server_id || null,
-      assigned_vps_id: ipForm.assigned_vps_id || null,
+      server_id: srvId,
+      assigned_vps_id: vpsId,
       ip_type: ipForm.ip_type,
       purpose: purpose || null,
       label: ipForm.label.trim() || null,
@@ -482,40 +503,59 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
               </div>
 
               <div className="form-field">
-                <label>Servidor asignado</label>
+                <label>Servidor Host (Físico / Hipervisor)</label>
                 <select
                   className="input"
                   value={ipForm.server_id}
-                  onChange={e => setIpForm(old => ({ ...old, server_id: e.target.value }))}
+                  onChange={e => {
+                    const nextHostId = e.target.value
+                    setIpForm(old => {
+                      const vpsBelongs = servers.some(s => s.id === old.assigned_vps_id && s.parent_id === nextHostId)
+                      return {
+                        ...old,
+                        server_id: nextHostId,
+                        assigned_vps_id: vpsBelongs ? old.assigned_vps_id : ''
+                      }
+                    })
+                  }}
                 >
                   <option value="">Libre / Sin servidor asignado</option>
-                  {servers.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.parent_id ? '  ↳ VPS: ' : ''}{s.name} ({s.hostname || s.server_type})
-                    </option>
-                  ))}
+                  {servers
+                    .filter(s => !s.parent_id)
+                    .map(s => (
+                      <option key={s.id} value={s.id}>
+                        🖥️ {s.name} ({s.hostname || s.server_type || 'Host'})
+                      </option>
+                    ))}
                 </select>
               </div>
 
-              {servers.some(s => s.parent_id) && (
-                <div className="form-field">
-                  <label>VPS asignado (Proxmox)</label>
-                  <select
-                    className="input"
-                    value={ipForm.assigned_vps_id}
-                    onChange={e => setIpForm(old => ({ ...old, assigned_vps_id: e.target.value }))}
-                  >
-                    <option value="">Libre / Sin VPS asignado</option>
-                    {servers
-                      .filter(s => Boolean(s.parent_id))
-                      .map(v => (
-                        <option key={v.id} value={v.id}>
-                          {v.vm_type === 'lxc' ? '📦 LXC' : '🖥️ KVM'} [{v.vm_id || '?'}] {v.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              )}
+              <div className="form-field">
+                <label>VPS asignado (Proxmox)</label>
+                <select
+                  className="input"
+                  value={ipForm.assigned_vps_id}
+                  onChange={e => setIpForm(old => ({ ...old, assigned_vps_id: e.target.value }))}
+                  disabled={!ipForm.server_id}
+                >
+                  {!ipForm.server_id ? (
+                    <option value="">Primero seleccioná un servidor físico</option>
+                  ) : servers.filter(s => s.parent_id === ipForm.server_id).length === 0 ? (
+                    <option value="">(Este servidor no tiene VPS registrados)</option>
+                  ) : (
+                    <>
+                      <option value="">Host Proxmox (Libre / Sin VPS)</option>
+                      {servers
+                        .filter(s => s.parent_id === ipForm.server_id)
+                        .map(v => (
+                          <option key={v.id} value={v.id}>
+                            {v.vm_type === 'lxc' ? '📦 LXC' : '🖥️ KVM'} [{v.vm_id || '?'}] {v.name}
+                          </option>
+                        ))}
+                    </>
+                  )}
+                </select>
+              </div>
 
               <div className="form-field">
                 <label>Tipo de IP</label>

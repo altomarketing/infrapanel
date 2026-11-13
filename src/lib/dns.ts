@@ -59,3 +59,33 @@ export async function lookupReverseDns(ipAddress: string): Promise<string | null
 
   return null
 }
+
+/**
+ * Desglosa un bloque CIDR IPv4 (ej. 66.70.129.32/29) en su lista de IPs individuales utilizables.
+ * Soporta prefijos desde /24 (256 IPs) hasta /32 (1 IP).
+ */
+export function expandCidrIpv4(cidr: string): string[] {
+  const parts = cidr.trim().split('/')
+  if (parts.length !== 2) return [cidr.trim()]
+  const baseIp = parts[0].trim()
+  const prefix = parseInt(parts[1].trim(), 10)
+  if (isNaN(prefix) || prefix < 24 || prefix > 32) return [baseIp]
+
+  const octets = baseIp.split('.').map(Number)
+  if (octets.length !== 4 || octets.some(o => isNaN(o) || o < 0 || o > 255)) return [baseIp]
+
+  const intIp = ((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3]
+  const total = 1 << (32 - prefix)
+  const ips: string[] = []
+
+  for (let i = 0; i < total; i++) {
+    const current = (intIp + i) >>> 0
+    const o1 = (current >>> 24) & 255
+    const o2 = (current >>> 16) & 255
+    const o3 = (current >>> 8) & 255
+    const o4 = current & 255
+    ips.push(`${o1}.${o2}.${o3}.${o4}`)
+  }
+  return ips
+}
+

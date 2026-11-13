@@ -13,7 +13,8 @@ import {
   Plus,
   Search,
   Server,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
@@ -43,7 +44,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [roleFilter, setRoleFilter] = useState<'all' | 'hosts' | 'vps' | 'kvm' | 'lxc'>('all')
+  const [roleFilter, setRoleFilter] = useState<'all' | 'hosts' | 'vps'>('all')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -126,13 +127,9 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       const matchesStatus = statusFilter === 'all' || server.status === statusFilter
       const isHost = !server.parent_id && (server.server_type === 'dedicated' || server.server_type === 'physical')
       const isVps = Boolean(server.parent_id) || server.server_type === 'vps'
-      const isLxc = isVps && server.vm_type === 'lxc'
-      const isKvm = isVps && server.vm_type !== 'lxc'
 
       if (roleFilter === 'hosts' && !isHost) return false
       if (roleFilter === 'vps' && !isVps) return false
-      if (roleFilter === 'kvm' && !isKvm) return false
-      if (roleFilter === 'lxc' && !isLxc) return false
 
       const q = query.toLowerCase().trim()
       const matchesQuery =
@@ -181,23 +178,60 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       {notice && <div className="alert success">{notice}</div>}
       {error && <div className="alert error">{error}</div>}
 
-      {/* KPI Stats */}
+      {/* KPI Stats - Clickable to filter */}
       <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-label">Hipervisores Proxmox</div>
+        <div
+          className="stat-card"
+          onClick={() => setRoleFilter(old => (old === 'hosts' ? 'all' : 'hosts'))}
+          style={{
+            cursor: 'pointer',
+            border: roleFilter === 'hosts' ? '2px solid #0284c7' : '1px solid #e2e8f0',
+            background: roleFilter === 'hosts' ? '#f0f9ff' : '#fff',
+            boxShadow: roleFilter === 'hosts' ? '0 4px 12px rgba(2, 132, 199, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title={roleFilter === 'hosts' ? 'Filtro activo: mostrando solo Hipervisores. Clic para mostrar todos.' : 'Clic para filtrar y ver solo Hipervisores Físicos'}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">Hipervisores Proxmox</div>
+            <Server size={18} style={{ color: '#0284c7' }} />
+          </div>
           <div className="stat-value" style={{ color: '#0284c7' }}>{totals.physicalHosts}</div>
-          <div className="stat-caption">Servidores dedicados físicos</div>
+          <div className="stat-caption" style={{ color: roleFilter === 'hosts' ? '#0369a1' : undefined, fontWeight: roleFilter === 'hosts' ? 700 : 400 }}>
+            {roleFilter === 'hosts' ? '✓ Filtrando Hipervisores (clic para quitar)' : 'Servidores dedicados físicos (clic para filtrar)'}
+          </div>
         </div>
-        <div className="stat-card">
-          <div className="stat-label">VPS Virtualizados</div>
+
+        <div
+          className="stat-card"
+          onClick={() => setRoleFilter(old => (old === 'vps' ? 'all' : 'vps'))}
+          style={{
+            cursor: 'pointer',
+            border: roleFilter === 'vps' ? '2px solid #16a34a' : '1px solid #e2e8f0',
+            background: roleFilter === 'vps' ? '#f0fdf4' : '#fff',
+            boxShadow: roleFilter === 'vps' ? '0 4px 12px rgba(22, 163, 74, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title={roleFilter === 'vps' ? 'Filtro activo: mostrando solo VPS. Clic para mostrar todos.' : 'Clic para filtrar y ver solo VPS'}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">VPS Virtualizados</div>
+            <Monitor size={18} style={{ color: '#16a34a' }} />
+          </div>
           <div className="stat-value" style={{ color: '#16a34a' }}>{totals.virtualVps}</div>
-          <div className="stat-caption">Máquinas KVM / LXC</div>
+          <div className="stat-caption" style={{ color: roleFilter === 'vps' ? '#15803d' : undefined, fontWeight: roleFilter === 'vps' ? 700 : 400 }}>
+            {roleFilter === 'vps' ? '✓ Filtrando VPS (clic para quitar)' : 'Máquinas KVM / LXC (clic para filtrar)'}
+          </div>
         </div>
+
         <div className="stat-card">
           <div className="stat-label">Instancias Activas</div>
           <div className="stat-value" style={{ color: '#0f172a' }}>{totals.active}</div>
           <div className="stat-caption">Operando en producción</div>
         </div>
+
         <div className="stat-card">
           <div className="stat-label">Gasto Mensual Servidores</div>
           <div className="stat-value" style={{ color: '#2563eb' }}>${totals.totalCost.toFixed(2)}</div>
@@ -218,17 +252,29 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <div className="filter-wrap">
-              <Boxes size={16} />
-              <select value={roleFilter} onChange={e => setRoleFilter(e.target.value as 'all' | 'hosts' | 'vps' | 'kvm' | 'lxc')}>
-                <option value="all">Todas las instancias ({servers.length})</option>
-                <option value="hosts">Solo Hipervisores Físicos ({totals.physicalHosts})</option>
-                <option value="vps">Todos los VPS / Contenedores ({totals.virtualVps})</option>
-                <option value="kvm">Solo KVM - Máquinas Virtuales ({totals.kvmCount})</option>
-                <option value="lxc">Solo LXC - Contenedores ({totals.lxcCount})</option>
-              </select>
-            </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            {roleFilter !== 'all' && (
+              <button
+                type="button"
+                className="button secondary"
+                style={{
+                  height: '34px',
+                  fontSize: '11px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: roleFilter === 'hosts' ? '#f0f9ff' : '#f0fdf4',
+                  borderColor: roleFilter === 'hosts' ? '#bae6fd' : '#bbf7d0',
+                  color: roleFilter === 'hosts' ? '#0369a1' : '#15803d',
+                  fontWeight: 600
+                }}
+                onClick={() => setRoleFilter('all')}
+                title="Quitar filtro y ver todas las instancias"
+              >
+                <span>Filtro: <strong>{roleFilter === 'hosts' ? 'Solo Hipervisores Físicos' : 'Solo VPS Virtualizados'}</strong></span>
+                <X size={13} />
+              </button>
+            )}
 
             <div className="filter-wrap">
               <Filter size={16} />

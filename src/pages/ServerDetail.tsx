@@ -200,7 +200,7 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
     let query = supabase!
       .from('ip_addresses')
-      .select('*, assigned_vps:assigned_vps_id(id,name,vm_id,vm_type)')
+      .select('*')
       .eq('workspace_id', workspaceId)
 
     if (parentId) {

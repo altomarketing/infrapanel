@@ -75,7 +75,7 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
     const [domRes, provRes, srvRes, ipRes] = await Promise.all([
       supabase!
         .from('domains')
-        .select('*, registrar_provider:providers!registrar_provider_id(name), dns_provider:providers!dns_provider_id(name), servers(name, hostname)')
+        .select('*, registrar_provider:providers!registrar_provider_id(name), dns_provider:providers!dns_provider_id(name), servers!server_id(name, hostname)')
         .eq('workspace_id', workspaceId)
         .order('name', { ascending: true }),
       supabase!.from('providers').select('id,name').eq('workspace_id', workspaceId).order('name'),

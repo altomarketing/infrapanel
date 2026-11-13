@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   Check,
+  Container,
   Copy,
   DollarSign,
   Edit2,
   Filter,
   Globe2,
+  Monitor,
   Network as NetworkIcon,
   Plus,
   Radio,
@@ -24,6 +26,7 @@ import type { IPAddress, Network, Server as ServerRecord } from '../types'
 type IpFormState = {
   address: string
   server_id: string
+  assigned_vps_id: string
   ip_type: 'public' | 'private'
   purpose: string // Reverse DNS
   label: string
@@ -34,6 +37,7 @@ type IpFormState = {
 const emptyIpForm: IpFormState = {
   address: '',
   server_id: '',
+  assigned_vps_id: '',
   ip_type: 'public',
   purpose: '',
   label: '',
@@ -106,17 +110,33 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     const [ipRes, netRes, srvRes] = await Promise.all([
       supabase!
         .from('ip_addresses')
-        .select('*, servers(name, hostname)')
+        .select('*')
         .eq('workspace_id', workspaceId)
         .order('address', { ascending: true }),
       supabase!.from('networks').select('*').eq('workspace_id', workspaceId).order('name', { ascending: true }),
-      supabase!.from('servers').select('id,name,hostname').eq('workspace_id', workspaceId).order('name')
+      supabase!.from('servers').select('id,name,hostname,parent_id,vm_id,vm_type,role,server_type').eq('workspace_id', workspaceId).order('name')
     ])
+
+    const srvList = (srvRes.data || []) as ServerRecord[]
+    const srvMap = new Map<string, ServerRecord>()
+    for (const s of srvList) {
+      srvMap.set(s.id, s)
+    }
 
     if (ipRes.error) {
       setError(ipRes.error.message)
     } else {
-      const onlyIpv4 = ((ipRes.data || []) as IPAddress[]).filter(ip => !ip.address.includes(':'))
+      const onlyIpv4 = ((ipRes.data || []) as IPAddress[])
+        .filter(ip => !ip.address.includes(':'))
+        .map(ip => {
+          const srv = ip.server_id ? srvMap.get(ip.server_id) : null
+          const vps = ip.assigned_vps_id ? srvMap.get(ip.assigned_vps_id) : null
+          return {
+            ...ip,
+            servers: srv ? { name: srv.name, hostname: srv.hostname } : null,
+            assigned_vps: vps ? { id: vps.id, name: vps.name, vm_id: vps.vm_id, vm_type: vps.vm_type } : null
+          }
+        })
       setIps(onlyIpv4)
     }
 
@@ -125,7 +145,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     }
 
     if (!srvRes.error) {
-      setServers((srvRes.data || []) as ServerRecord[])
+      setServers(srvList)
     }
 
     setLoading(false)
@@ -142,12 +162,12 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
       .filter(ip => {
         const matchesFilter =
           ipFilter === 'all' ||
-          (ipFilter === 'assigned' && Boolean(ip.server_id)) ||
-          (ipFilter === 'free' && !ip.server_id) ||
+          (ipFilter === 'assigned' && (Boolean(ip.server_id) || Boolean(ip.assigned_vps_id))) ||
+          (ipFilter === 'free' && !ip.server_id && !ip.assigned_vps_id) ||
           (ipFilter === 'public' && ip.ip_type === 'public') ||
           (ipFilter === 'private' && ip.ip_type === 'private')
 
-        const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''}`.toLowerCase()
+        const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''} ${ip.assigned_vps?.name || ''}`.toLowerCase()
         return matchesFilter && text.includes(query.toLowerCase())
       })
   }, [ips, ipFilter, query])
@@ -186,6 +206,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     setIpForm({
       address: ip.address,
       server_id: ip.server_id || '',
+      assigned_vps_id: ip.assigned_vps_id || '',
       ip_type: ip.ip_type === 'private' ? 'private' : 'public',
       purpose: ip.purpose || '',
       label: ip.label || '',
@@ -211,6 +232,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
       workspace_id: workspaceId,
       address: ipForm.address.trim(),
       server_id: ipForm.server_id || null,
+      assigned_vps_id: ipForm.assigned_vps_id || null,
       ip_type: ipForm.ip_type,
       purpose: purpose || null,
       label: ipForm.label.trim() || null,
@@ -224,11 +246,16 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     }
 
     if (editingIp) {
-      const { error: updErr } = await supabase!
+      let { error: updErr } = await supabase!
         .from('ip_addresses')
         .update(payload)
         .eq('id', editingIp.id)
         .eq('workspace_id', workspaceId)
+
+      if (updErr && updErr.message.includes('assigned_vps_id')) {
+        delete payload.assigned_vps_id
+        updErr = (await supabase!.from('ip_addresses').update(payload).eq('id', editingIp.id).eq('workspace_id', workspaceId)).error
+      }
 
       if (updErr) {
         setError(updErr.message)
@@ -237,7 +264,12 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
       }
       setNotice('Dirección IP actualizada.')
     } else {
-      const { error: insErr } = await supabase!.from('ip_addresses').insert(payload)
+      let { error: insErr } = await supabase!.from('ip_addresses').insert(payload)
+      if (insErr && insErr.message.includes('assigned_vps_id')) {
+        delete payload.assigned_vps_id
+        insErr = (await supabase!.from('ip_addresses').insert(payload)).error
+      }
+
       if (insErr) {
         setError(insErr.message)
         setSavingIp(false)
@@ -459,11 +491,31 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                   <option value="">Libre / Sin servidor asignado</option>
                   {servers.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.name} ({s.hostname || s.server_type})
+                      {s.parent_id ? '  ↳ VPS: ' : ''}{s.name} ({s.hostname || s.server_type})
                     </option>
                   ))}
                 </select>
               </div>
+
+              {servers.some(s => s.parent_id) && (
+                <div className="form-field">
+                  <label>VPS asignado (Proxmox)</label>
+                  <select
+                    className="input"
+                    value={ipForm.assigned_vps_id}
+                    onChange={e => setIpForm(old => ({ ...old, assigned_vps_id: e.target.value }))}
+                  >
+                    <option value="">Libre / Sin VPS asignado</option>
+                    {servers
+                      .filter(s => Boolean(s.parent_id))
+                      .map(v => (
+                        <option key={v.id} value={v.id}>
+                          {v.vm_type === 'lxc' ? '📦 LXC' : '🖥️ KVM'} [{v.vm_id || '?'}] {v.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
 
               <div className="form-field">
                 <label>Tipo de IP</label>
@@ -763,10 +815,30 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                           )}
                         </td>
                         <td>
-                          {ip.servers?.name ? (
-                            <span className="ip-badge" style={{ background: '#f8fafc', color: '#334155', borderColor: '#e2e8f0' }}>
-                              <Server size={11} /> {ip.servers.name}
-                            </span>
+                          {ip.servers?.name || ip.assigned_vps?.name ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              {ip.servers?.name && (
+                                <span className="ip-badge" style={{ background: '#f8fafc', color: '#334155', borderColor: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                  <Server size={11} /> {ip.servers.name}
+                                </span>
+                              )}
+                              {ip.assigned_vps && (
+                                <span
+                                  className="ip-badge"
+                                  style={{
+                                    background: ip.assigned_vps.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4',
+                                    color: ip.assigned_vps.vm_type === 'lxc' ? '#0891b2' : '#16a34a',
+                                    borderColor: ip.assigned_vps.vm_type === 'lxc' ? '#a5f3fc' : '#bbf7d0',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px'
+                                  }}
+                                >
+                                  {ip.assigned_vps.vm_type === 'lxc' ? <Container size={10} /> : <Monitor size={10} />}
+                                  {ip.assigned_vps.vm_type === 'lxc' ? 'LXC' : 'KVM'} {ip.assigned_vps.vm_id ? `[${ip.assigned_vps.vm_id}] ` : ''}{ip.assigned_vps.name}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="ip-badge" style={{ background: '#fffbeb', color: '#b45309', borderColor: '#fef3c7' }}>
                               Libre / Sin servidor

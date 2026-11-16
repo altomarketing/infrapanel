@@ -1291,10 +1291,10 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                         </p>
                         <div style={{ position: 'relative' }}>
                           <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '10px 12px', borderRadius: '6px', fontSize: '11px', overflowX: 'auto', margin: 0, lineHeight: 1.5 }}>
-{`# 1. Crear el token llamado infrapanel
-pveum user token add root@pam infrapanel --privsep 0
+{`# 1. Crear el token con separación de privilegios activa (--privsep 1)
+pveum user token add root@pam infrapanel --privsep 1
 
-# 2. Asignarle el rol PVEAuditor (SOLO LECTURA)
+# 2. Asignarle el rol PVEAuditor (SOLO LECTURA estricta, no hereda permisos de root)
 pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                           </pre>
                           <button
@@ -1302,7 +1302,7 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                             className="button small"
                             style={{ position: 'absolute', top: '6px', right: '6px', fontSize: '10px', padding: '3px 8px' }}
                             onClick={() => {
-                              navigator.clipboard.writeText("pveum user token add root@pam infrapanel --privsep 0\npveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor")
+                              navigator.clipboard.writeText("pveum user token add root@pam infrapanel --privsep 1\npveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor")
                               setCopiedPveCmd(true)
                               setTimeout(() => setCopiedPveCmd(false), 2000)
                             }}
@@ -1311,7 +1311,7 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                           </button>
                         </div>
                         <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#64748b' }}>
-                          El comando 1 te devolverá el <code>value</code> (UUID secreto). Copialo y pegalo arriba en <strong>Token Secret</strong>.
+                          Con <code>--privsep 1</code>, el token no hereda los permisos de root y queda estrictamente limitado a <strong>PVEAuditor</strong> (solo lectura). El comando 1 te devolverá el <code>value</code> (UUID secreto).
                         </p>
                       </div>
                     )}

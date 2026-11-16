@@ -115,8 +115,16 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
   // In-page Proxmox Sync / Import panel
   const [showSyncProxmox, setShowSyncProxmox] = useState(false)
+  const [syncMode, setSyncMode] = useState<'token' | 'manual'>('token')
   const [syncImportText, setSyncImportText] = useState('')
   const [importingVms, setImportingVms] = useState(false)
+  const [pveUrl, setPveUrl] = useState('')
+  const [pveTokenId, setPveTokenId] = useState('')
+  const [pveTokenSecret, setPveTokenSecret] = useState('')
+  const [savingPveCreds, setSavingPveCreds] = useState(false)
+  const [syncingApi, setSyncingApi] = useState(false)
+  const [showPveGuide, setShowPveGuide] = useState(false)
+  const [copiedPveCmd, setCopiedPveCmd] = useState(false)
 
   // Filter IPs & VMs inside server
   const [ipQuery, setIpQuery] = useState('')
@@ -320,6 +328,14 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     loadVms()
     loadDomains()
   }, [loadServer, loadIps, loadVms, loadDomains])
+
+  useEffect(() => {
+    if (server) {
+      setPveUrl(server.proxmox_api_url || (server.hostname ? `https://${server.hostname}:8006` : ''))
+      setPveTokenId(server.proxmox_api_token_id || 'root@pam!infrapanel')
+      setPveTokenSecret(server.proxmox_api_token_secret || '')
+    }
+  }, [server])
 
   // Real-time PTR resolution when user types IP in Add form
   async function triggerDohLookup(ipVal: string) {
@@ -697,6 +713,99 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
     await loadVms()
     await loadIps()
     setImportingVms(false)
+  }
+
+  // Save Proxmox API credentials
+  async function handleSavePveCredentials() {
+    if (!serverId) return
+    setSavingPveCreds(true)
+    setError('')
+
+    const { error: updErr } = await supabase!
+      .from('servers')
+      .update({
+        proxmox_api_url: pveUrl.trim() || null,
+        proxmox_api_token_id: pveTokenId.trim() || null,
+        proxmox_api_token_secret: pveTokenSecret.trim() || null
+      })
+      .eq('id', serverId)
+      .eq('workspace_id', workspaceId)
+
+    if (updErr) {
+      setError(`Error al guardar credenciales: ${updErr.message}`)
+    } else {
+      setNotice('Credenciales de API Proxmox guardadas en este servidor.')
+      await loadServer()
+    }
+    setSavingPveCreds(false)
+  }
+
+  // Direct API sync from Proxmox using token
+  async function handleDirectApiSync() {
+    if (!pveUrl.trim() || !pveTokenId.trim() || !pveTokenSecret.trim()) {
+      setError('Por favor completá la URL, Token ID y Token Secret de Proxmox para sincronizar.')
+      return
+    }
+
+    setSyncingApi(true)
+    setError('')
+
+    // Save credentials first
+    await handleSavePveCredentials()
+
+    const cleanUrl = pveUrl.trim().replace(/\/+$/, '')
+    const endpoint = `${cleanUrl}/api2/json/cluster/resources`
+
+    try {
+      const res = await fetch(endpoint, {
+        headers: {
+          Authorization: `PVEAPIToken=${pveTokenId.trim()}=${pveTokenSecret.trim()}`,
+          Accept: 'application/json'
+        }
+      })
+
+      if (!res.ok) {
+        throw new Error(`Proxmox respondió con código HTTP ${res.status}: ${res.statusText}`)
+      }
+
+      const json = await res.json()
+      const parsedList = parseProxmoxApiResponse(json)
+
+      if (parsedList.length === 0) {
+        setError('La API de Proxmox respondió correctamente pero no se encontraron VMs o contenedores en los recursos del cluster.')
+        setSyncingApi(false)
+        return
+      }
+
+      let importedCount = 0
+      for (const item of parsedList) {
+        const payload: Record<string, unknown> = {
+          workspace_id: workspaceId,
+          parent_id: serverId,
+          name: item.name,
+          hostname: item.name,
+          vm_id: String(item.vmid),
+          vm_type: item.vm_type || 'qemu',
+          server_type: 'vps',
+          status: item.status === 'running' ? 'active' : 'inactive',
+          cpu: item.cpus ? `${item.cpus} vCPU` : '2 vCPU',
+          ram_gb: item.maxmem ? Math.round(item.maxmem / (1024 * 1024 * 1024)) : 4,
+          storage_gb: item.maxdisk ? Math.round(item.maxdisk / (1024 * 1024 * 1024)) : 40
+        }
+
+        const { error: insErr } = await supabase!.from('servers').upsert(payload, { onConflict: 'workspace_id,name' })
+        if (!insErr) importedCount++
+      }
+
+      setNotice(`¡Sincronización exitosa! Se actualizaron ${importedCount} VPS desde la API de Proxmox.`)
+      await loadVms()
+      await loadIps()
+      setShowSyncProxmox(false)
+    } catch (fetchErr: any) {
+      setError(`No se pudo conectar directamente con Proxmox (${fetchErr.message}). Si tu Proxmox usa certificado autofirmado en el puerto 8006, abrí ${cleanUrl} en otra pestaña para aceptar el certificado SSL, o pegá la salida de la API en la pestaña manual.`)
+    } finally {
+      setSyncingApi(false)
+    }
   }
 
   // Delete server or child VM
@@ -1084,14 +1193,14 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
 
           {/* IN-PAGE SYNC / IMPORT PANEL */}
           {showSyncProxmox && (
-            <form className="inpage-subform" onSubmit={handleBulkImportProxmox} style={{ marginBottom: '22px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div className="inpage-subform" style={{ marginBottom: '22px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#1e293b' }}>
-                    Sincronización rápida con Proxmox VE
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#1e293b' }}>
+                    Sincronización Proxmox VE
                   </h3>
                   <span style={{ fontSize: '12px', color: '#64748b' }}>
-                    Pegá la salida del comando <code>qm list</code> (KVM), <code>pct list</code> (LXC) o el JSON de la API de Proxmox para importar y sincronizar todas las instancias.
+                    Conectá vía Token API de Solo Lectura o pegá la salida de recursos JSON / qm list.
                   </span>
                 </div>
                 <button type="button" className="icon-button" onClick={() => setShowSyncProxmox(false)}>
@@ -1099,25 +1208,148 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
                 </button>
               </div>
 
-              <textarea
-                className="input"
-                rows={5}
-                required
-                placeholder="VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB)&#10; 100 radio13.altomarketing.net running    8192       50.00&#10; 101 mate.altomarketing.net running    4096       40.00"
-                value={syncImportText}
-                onChange={e => setSyncImportText(e.target.value)}
-                style={{ fontFamily: 'monospace', fontSize: '12px', marginBottom: '12px' }}
-              />
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                <button type="button" className="button secondary" onClick={() => setShowSyncProxmox(false)}>
-                  Cancelar
+              {/* Mode switch */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                <button
+                  type="button"
+                  className={`button ${syncMode === 'token' ? 'primary' : 'secondary'}`}
+                  style={{ height: '32px', fontSize: '12px' }}
+                  onClick={() => setSyncMode('token')}
+                >
+                  ⚡ Conexión Directa API Token (Solo Lectura)
                 </button>
-                <button type="submit" className="button primary" disabled={importingVms}>
-                  <Upload size={14} /> {importingVms ? 'Importando…' : 'Procesar e Importar VMs'}
+                <button
+                  type="button"
+                  className={`button ${syncMode === 'manual' ? 'primary' : 'secondary'}`}
+                  style={{ height: '32px', fontSize: '12px' }}
+                  onClick={() => setSyncMode('manual')}
+                >
+                  📋 Pegar JSON / qm list
                 </button>
               </div>
-            </form>
+
+              {syncMode === 'token' ? (
+                <div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '14px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                        URL Endpoint de Proxmox *
+                      </label>
+                      <input
+                        className="input"
+                        placeholder="https://ip-del-nodo:8006"
+                        value={pveUrl}
+                        onChange={e => setPveUrl(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                        Token ID *
+                      </label>
+                      <input
+                        className="input"
+                        placeholder="root@pam!infrapanel"
+                        value={pveTokenId}
+                        onChange={e => setPveTokenId(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                        Token Secret (UUID) *
+                      </label>
+                      <input
+                        className="input"
+                        type="password"
+                        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                        value={pveTokenSecret}
+                        onChange={e => setPveTokenSecret(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Read only info banner */}
+                  <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>
+                        🔒 Modo Solo Lectura (Rol PVEAuditor): Proxmox no permite modificar ni apagar nada.
+                      </span>
+                      <button
+                        type="button"
+                        style={{ border: 'none', background: 'none', color: '#2563eb', fontSize: '11px', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                        onClick={() => setShowPveGuide(!showPveGuide)}
+                      >
+                        {showPveGuide ? 'Ocultar guía SSH' : '¿Cómo crear el token en Proxmox? (2 comandos SSH)'}
+                      </button>
+                    </div>
+
+                    {showPveGuide && (
+                      <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #e2e8f0', fontSize: '12px', color: '#334155' }}>
+                        <p style={{ margin: '0 0 6px' }}>
+                          Abrí la terminal de tu Proxmox (Shell de Node) y ejecutá estos dos comandos:
+                        </p>
+                        <div style={{ position: 'relative' }}>
+                          <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '10px 12px', borderRadius: '6px', fontSize: '11px', overflowX: 'auto', margin: 0, lineHeight: 1.5 }}>
+{`# 1. Crear el token llamado infrapanel
+pveum user token add root@pam infrapanel --privsep 0
+
+# 2. Asignarle el rol PVEAuditor (SOLO LECTURA)
+pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
+                          </pre>
+                          <button
+                            type="button"
+                            className="button small"
+                            style={{ position: 'absolute', top: '6px', right: '6px', fontSize: '10px', padding: '3px 8px' }}
+                            onClick={() => {
+                              navigator.clipboard.writeText("pveum user token add root@pam infrapanel --privsep 0\npveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor")
+                              setCopiedPveCmd(true)
+                              setTimeout(() => setCopiedPveCmd(false), 2000)
+                            }}
+                          >
+                            {copiedPveCmd ? '✓ Copiado' : 'Copiar comandos'}
+                          </button>
+                        </div>
+                        <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#64748b' }}>
+                          El comando 1 te devolverá el <code>value</code> (UUID secreto). Copialo y pegalo arriba en <strong>Token Secret</strong>.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                    <button type="button" className="button secondary" onClick={handleSavePveCredentials} disabled={savingPveCreds}>
+                      {savingPveCreds ? 'Guardando…' : 'Guardar credenciales'}
+                    </button>
+                    <button type="button" className="button primary" onClick={handleDirectApiSync} disabled={syncingApi}>
+                      <RefreshCw size={14} className={syncingApi ? 'spinner' : ''} />
+                      {syncingApi ? 'Sincronizando con Proxmox…' : 'Sincronizar vía API ahora'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleBulkImportProxmox}>
+                  <textarea
+                    className="input"
+                    rows={5}
+                    required
+                    placeholder="VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB)&#10; 100 radio13.altomarketing.net running    8192       50.00&#10; 101 mate.altomarketing.net running    4096       40.00"
+                    value={syncImportText}
+                    onChange={e => setSyncImportText(e.target.value)}
+                    style={{ fontFamily: 'monospace', fontSize: '12px', marginBottom: '12px' }}
+                  />
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                    <button type="button" className="button secondary" onClick={() => setShowSyncProxmox(false)}>
+                      Cancelar
+                    </button>
+                    <button type="submit" className="button primary" disabled={importingVms}>
+                      <Upload size={14} /> {importingVms ? 'Importando…' : 'Procesar e Importar VMs'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           )}
 
           {/* IN-PAGE ADD VM FORM */}

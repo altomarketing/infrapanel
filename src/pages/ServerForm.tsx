@@ -611,27 +611,49 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
             {showPveFallback && (
               <div style={{ marginTop: '24px', background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: '10px', padding: '16px' }}>
                 <h4 style={{ margin: '0 0 8px', fontSize: '13px', color: '#b45309', fontWeight: 700 }}>
-                  ¿Proxmox usa certificado autofirmado en el puerto 8006?
+                  ¿Por qué ocurre este error? (Certificado SSL autofirmado de Proxmox)
                 </h4>
-                <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#92400e' }}>
-                  Los navegadores bloquean llamadas directas si el SSL de Proxmox es autofirmado.
-                  Podés abrir <a href={pveUrl} target="_blank" rel="noreferrer" style={{ fontWeight: 700, textDecoration: 'underline', color: '#2563eb' }}>{pveUrl} en otra pestaña</a> para aceptar el certificado, o pegar la respuesta JSON aquí:
+                <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#92400e', lineHeight: 1.5 }}>
+                  Los navegadores web bloquean peticiones en segundo plano hacia servidores con certificados SSL autofirmados (el que Proxmox crea de fábrica en el puerto 8006). Tenés 2 formas rápidas de solucionarlo:
                 </p>
-                <form onSubmit={handleFallbackJsonImport}>
-                  <textarea
-                    className="input"
-                    rows={4}
-                    placeholder="Pegá aquí el JSON devuelto por Proxmox cluster/resources…"
-                    value={pveFallbackJson}
-                    onChange={e => setPveFallbackJson(e.target.value)}
-                    style={{ fontFamily: 'monospace', fontSize: '11px', marginBottom: '10px' }}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button type="submit" className="button primary" disabled={connectingPve || !pveFallbackJson.trim()}>
-                      <Upload size={14} /> Crear Servidor con este JSON
-                    </button>
-                  </div>
-                </form>
+
+                <div style={{ background: '#ffffff', borderRadius: '8px', padding: '12px', border: '1px solid #fde68a', marginBottom: '14px' }}>
+                  <strong style={{ fontSize: '12px', color: '#1e293b', display: 'block', marginBottom: '4px' }}>
+                    Opción 1: Aceptar el certificado en tu navegador (10 segundos)
+                  </strong>
+                  <span style={{ fontSize: '11px', color: '#475569', display: 'block', marginBottom: '8px' }}>
+                    1. Abrí <a href={pveUrl} target="_blank" rel="noreferrer" style={{ fontWeight: 700, textDecoration: 'underline', color: '#2563eb' }}>{pveUrl} en una nueva pestaña</a>.<br />
+                    2. Tu navegador mostrará una advertencia de seguridad. Hacé clic en <strong>Avanzado</strong> y luego en <strong>Continuar al sitio (no seguro)</strong> hasta ver la pantalla de login de Proxmox.<br />
+                    3. Volvé a esta pestaña y tocá de nuevo el botón de arriba <strong>⚡ Conectar, Crear Servidor e Importar VPS</strong>.
+                  </span>
+                </div>
+
+                <div style={{ background: '#ffffff', borderRadius: '8px', padding: '12px', border: '1px solid #fde68a' }}>
+                  <strong style={{ fontSize: '12px', color: '#1e293b', display: 'block', marginBottom: '4px' }}>
+                    Opción 2: Pegar el JSON directamente desde la consola de Proxmox
+                  </strong>
+                  <span style={{ fontSize: '11px', color: '#475569', display: 'block', marginBottom: '8px' }}>
+                    En la terminal (Shell) de tu Proxmox ejecutá:
+                  </span>
+                  <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '8px 12px', borderRadius: '6px', fontSize: '11px', margin: '0 0 8px', overflowX: 'auto' }}>
+pvesh get /cluster/resources --output-format json
+                  </pre>
+                  <form onSubmit={handleFallbackJsonImport}>
+                    <textarea
+                      className="input"
+                      rows={4}
+                      placeholder="Pegá aquí el JSON que te devolvió el comando anterior…"
+                      value={pveFallbackJson}
+                      onChange={e => setPveFallbackJson(e.target.value)}
+                      style={{ fontFamily: 'monospace', fontSize: '11px', marginBottom: '10px' }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button type="submit" className="button primary" disabled={connectingPve || !pveFallbackJson.trim()}>
+                        <Upload size={14} /> Crear Servidor con este JSON
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
             )}
           </div>

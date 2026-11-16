@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
-import { ArrowLeft, Save, Server, Boxes } from 'lucide-react'
+import { ArrowLeft, Save, Server, Boxes, Upload, Zap, ShieldCheck } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
+import { parseProxmoxApiResponse } from '../lib/proxmox'
 import type { Provider, Server as ServerRecord, ServerStatus, ServerType } from '../types'
 
 type FormState = {
@@ -69,6 +70,142 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // Proxmox Direct Priority Mode
+  const [creationMode, setCreationMode] = useState<'proxmox' | 'manual'>(initialParent ? 'manual' : 'proxmox')
+  const [pveUrl, setPveUrl] = useState('')
+  const [pveTokenId, setPveTokenId] = useState('root@pam!infrapanel')
+  const [pveTokenSecret, setPveTokenSecret] = useState('')
+  const [pveServerName, setPveServerName] = useState('')
+  const [pveProviderId, setPveProviderId] = useState('')
+  const [pvePublicIp, setPvePublicIp] = useState('')
+  const [connectingPve, setConnectingPve] = useState(false)
+  const [pveGuideOpen, setPveGuideOpen] = useState(true)
+  const [copiedPveCmd, setCopiedPveCmd] = useState(false)
+  const [pveFallbackJson, setPveFallbackJson] = useState('')
+  const [showPveFallback, setShowPveFallback] = useState(false)
+
+  async function handleProxmoxDirectConnect(e: FormEvent) {
+    e.preventDefault()
+    if (!pveUrl.trim() || !pveTokenId.trim() || !pveTokenSecret.trim()) {
+      setError('Por favor completá la URL, Token ID y Token Secret de Proxmox.')
+      return
+    }
+
+    setConnectingPve(true)
+    setError('')
+    setShowPveFallback(false)
+
+    const cleanUrl = pveUrl.trim().replace(/\/+$/, '')
+    const endpoint = `${cleanUrl}/api2/json/cluster/resources`
+
+    let json: any = null
+    try {
+      const res = await fetch(endpoint, {
+        headers: {
+          Authorization: `PVEAPIToken=${pveTokenId.trim()}=${pveTokenSecret.trim()}`,
+          Accept: 'application/json'
+        }
+      })
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      }
+      json = await res.json()
+    } catch (err: any) {
+      setError(`No se pudo conectar directamente con Proxmox (${err.message}). Suele ocurrir si Proxmox usa certificado SSL autofirmado en el puerto 8006 o restringe CORS. Podés abrir ${cleanUrl} en otra pestaña para aceptar el certificado, o pegar el JSON abajo.`)
+      setShowPveFallback(true)
+      setConnectingPve(false)
+      return
+    }
+
+    await createServerAndImportVms(json)
+  }
+
+  async function handleFallbackJsonImport(e: FormEvent) {
+    e.preventDefault()
+    if (!pveFallbackJson.trim()) return
+    setConnectingPve(true)
+    setError('')
+    try {
+      const json = JSON.parse(pveFallbackJson.trim())
+      await createServerAndImportVms(json)
+    } catch (err: any) {
+      setError(`El texto ingresado no es un JSON válido: ${err.message}`)
+      setConnectingPve(false)
+    }
+  }
+
+  async function createServerAndImportVms(json: any) {
+    const cleanUrl = pveUrl.trim().replace(/\/+$/, '')
+    let detectedHostname = ''
+    try {
+      const urlObj = new URL(cleanUrl)
+      detectedHostname = urlObj.hostname
+    } catch {
+      // ignore
+    }
+
+    const hostName = pveServerName.trim() || detectedHostname || 'Proxmox Hipervisor'
+
+    const hostPayload: Record<string, unknown> = {
+      workspace_id: workspaceId,
+      name: hostName,
+      hostname: detectedHostname || null,
+      server_type: 'dedicated',
+      status: 'active',
+      operating_system: 'Proxmox VE',
+      provider_id: pveProviderId || null,
+      management_url: cleanUrl,
+      proxmox_api_url: cleanUrl,
+      proxmox_api_token_id: pveTokenId.trim(),
+      proxmox_api_token_secret: pveTokenSecret.trim()
+    }
+
+    const { data: newHost, error: hostErr } = await supabase!
+      .from('servers')
+      .insert(hostPayload)
+      .select('id')
+      .single()
+
+    if (hostErr || !newHost) {
+      setError(`Error al registrar el servidor físico: ${hostErr?.message}`)
+      setConnectingPve(false)
+      return
+    }
+
+    const hostId = newHost.id
+
+    if (pvePublicIp.trim()) {
+      await supabase!.from('ip_addresses').insert({
+        workspace_id: workspaceId,
+        server_id: hostId,
+        address: pvePublicIp.trim(),
+        ip_type: 'public',
+        label: 'IP principal host'
+      })
+    }
+
+    const parsedList = parseProxmoxApiResponse(json)
+    for (const item of parsedList) {
+      const vmPayload: Record<string, unknown> = {
+        workspace_id: workspaceId,
+        parent_id: hostId,
+        name: item.name,
+        hostname: item.name,
+        vm_id: String(item.vmid),
+        vm_type: item.vm_type || 'qemu',
+        server_type: 'vps',
+        status: item.status === 'running' ? 'active' : 'inactive',
+        cpu: item.cpus ? `${item.cpus} vCPU` : '2 vCPU',
+        ram_gb: item.maxmem ? Math.round(item.maxmem / (1024 * 1024 * 1024)) : 4,
+        storage_gb: item.maxdisk ? Math.round(item.maxdisk / (1024 * 1024 * 1024)) : 40
+      }
+      await supabase!.from('servers').upsert(vmPayload, { onConflict: 'workspace_id,name' })
+    }
+
+    navigate(`/servers/${hostId}`)
+  }
 
   // Set breadcrumbs dynamically
   useSetBreadcrumbs(
@@ -292,7 +429,214 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
           </div>
         </div>
 
-        <form onSubmit={handleSubmit}>
+        {isNew && !initialParent && (
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '22px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={`button ${creationMode === 'proxmox' ? 'primary' : 'secondary'}`}
+              style={{
+                height: '38px',
+                fontSize: '13px',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+              onClick={() => setCreationMode('proxmox')}
+            >
+              <Zap size={16} /> ⚡ Conexión Directa API Token (Proxmox VE) — Recomendado
+            </button>
+            <button
+              type="button"
+              className={`button ${creationMode === 'manual' ? 'primary' : 'secondary'}`}
+              style={{
+                height: '38px',
+                fontSize: '13px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+              onClick={() => setCreationMode('manual')}
+            >
+              📝 Configuración Manual (Sin Proxmox / Genérico)
+            </button>
+          </div>
+        )}
+
+        {isNew && !initialParent && creationMode === 'proxmox' ? (
+          <div>
+            <form onSubmit={handleProxmoxDirectConnect}>
+              {/* Guidance box */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <ShieldCheck size={18} color="#16a34a" />
+                    <strong style={{ fontSize: '13px', color: '#0f172a' }}>
+                      Token de Solo Lectura con --privsep 1 (Aislamiento Total)
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    style={{ border: 'none', background: 'none', color: '#2563eb', fontSize: '12px', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => setPveGuideOpen(!pveGuideOpen)}
+                  >
+                    {pveGuideOpen ? 'Ocultar comandos SSH' : 'Ver comandos para crear el token en Proxmox'}
+                  </button>
+                </div>
+
+                {pveGuideOpen && (
+                  <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                    <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#475569' }}>
+                      Ejecutá estos dos comandos en la terminal (Shell) de tu Proxmox para crear el token 100% aislado en solo lectura:
+                    </p>
+                    <div style={{ position: 'relative' }}>
+                      <pre style={{ background: '#0f172a', color: '#38bdf8', padding: '12px 14px', borderRadius: '8px', fontSize: '11px', overflowX: 'auto', margin: 0, lineHeight: 1.6 }}>
+{`# 1. Crear el token con separación de privilegios activa (--privsep 1)
+pveum user token add root@pam infrapanel --privsep 1
+
+# 2. Asignarle el rol PVEAuditor (SOLO LECTURA estricta, no hereda permisos de root)
+pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
+                      </pre>
+                      <button
+                        type="button"
+                        className="button small"
+                        style={{ position: 'absolute', top: '8px', right: '8px', fontSize: '11px', padding: '3px 8px' }}
+                        onClick={() => {
+                          navigator.clipboard.writeText("pveum user token add root@pam infrapanel --privsep 1\npveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor")
+                          setCopiedPveCmd(true)
+                          setTimeout(() => setCopiedPveCmd(false), 2000)
+                        }}
+                      >
+                        {copiedPveCmd ? '✓ Copiado' : 'Copiar comandos'}
+                      </button>
+                    </div>
+                    <p style={{ margin: '8px 0 0', fontSize: '11px', color: '#64748b' }}>
+                      El comando 1 te devolverá el <code>value</code> (UUID secreto). Pegalo abajo en <strong>Token Secret</strong>.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Proxmox Form Fields */}
+              <div className="form-grid">
+                <div className="form-field">
+                  <label>Nombre del Servidor en InfraPanel (opcional)</label>
+                  <input
+                    className="input"
+                    placeholder="ej. ns5012993 o Proxmox-Node1"
+                    value={pveServerName}
+                    onChange={e => setPveServerName(e.target.value)}
+                  />
+                  <span style={{ fontSize: '10px', color: '#94a3b8' }}>Si se deja vacío, se usará el hostname detectado.</span>
+                </div>
+
+                <div className="form-field">
+                  <label>URL Endpoint de Proxmox *</label>
+                  <input
+                    className="input"
+                    required
+                    placeholder="https://15.235.64.xxx:8006"
+                    value={pveUrl}
+                    onChange={e => setPveUrl(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Token ID *</label>
+                  <input
+                    className="input"
+                    required
+                    placeholder="root@pam!infrapanel"
+                    value={pveTokenId}
+                    onChange={e => setPveTokenId(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Token Secret (UUID del comando 1) *</label>
+                  <input
+                    className="input"
+                    type="password"
+                    required
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    value={pveTokenSecret}
+                    onChange={e => setPveTokenSecret(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>IP Pública del Servidor Físico (opcional)</label>
+                  <input
+                    className="input"
+                    placeholder="ej. 15.235.64.xxx"
+                    value={pvePublicIp}
+                    onChange={e => setPvePublicIp(e.target.value)}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <label>Proveedor (opcional)</label>
+                  <select
+                    className="input"
+                    value={pveProviderId}
+                    onChange={e => setPveProviderId(e.target.value)}
+                  >
+                    <option value="">Sin proveedor asignado</option>
+                    {providers.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '24px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
+                <Link to={backUrl} className="button secondary">
+                  Cancelar
+                </Link>
+                <button
+                  type="submit"
+                  className="button primary"
+                  disabled={connectingPve}
+                  style={{ height: '40px', fontSize: '13px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+                >
+                  <Zap size={16} />
+                  {connectingPve ? 'Conectando y detectando VMs…' : '⚡ Conectar, Crear Servidor e Importar VPS'}
+                </button>
+              </div>
+            </form>
+
+            {/* Fallback in case of browser SSL self-signed restriction */}
+            {showPveFallback && (
+              <div style={{ marginTop: '24px', background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: '10px', padding: '16px' }}>
+                <h4 style={{ margin: '0 0 8px', fontSize: '13px', color: '#b45309', fontWeight: 700 }}>
+                  ¿Proxmox usa certificado autofirmado en el puerto 8006?
+                </h4>
+                <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#92400e' }}>
+                  Los navegadores bloquean llamadas directas si el SSL de Proxmox es autofirmado.
+                  Podés abrir <a href={pveUrl} target="_blank" rel="noreferrer" style={{ fontWeight: 700, textDecoration: 'underline', color: '#2563eb' }}>{pveUrl} en otra pestaña</a> para aceptar el certificado, o pegar la respuesta JSON aquí:
+                </p>
+                <form onSubmit={handleFallbackJsonImport}>
+                  <textarea
+                    className="input"
+                    rows={4}
+                    placeholder="Pegá aquí el JSON devuelto por Proxmox cluster/resources…"
+                    value={pveFallbackJson}
+                    onChange={e => setPveFallbackJson(e.target.value)}
+                    style={{ fontFamily: 'monospace', fontSize: '11px', marginBottom: '10px' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button type="submit" className="button primary" disabled={connectingPve || !pveFallbackJson.trim()}>
+                      <Upload size={14} /> Crear Servidor con este JSON
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit}>
           <div className="form-grid">
             <div className="form-field">
               <label>Tipo de servidor / instancia *</label>
@@ -537,7 +881,8 @@ export default function ServerForm({ workspaceId, isNew }: { workspaceId: string
             </button>
           </div>
         </form>
-      </section>
+      )}
+    </section>
     </div>
   )
 }

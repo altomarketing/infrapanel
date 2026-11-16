@@ -5,20 +5,23 @@ import {
   Container,
   Copy,
   DollarSign,
+  Download,
   Edit2,
   Globe2,
   Monitor,
   Network as NetworkIcon,
   Plus,
   Radio,
+  RefreshCw,
   Search,
   Server,
   Trash2,
+  Upload,
   Wifi,
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { lookupReverseDns } from '../lib/dns'
+import { lookupReverseDns, expandCidrIpv4 } from '../lib/dns'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import type { IPAddress, Network, Server as ServerRecord } from '../types'
 
@@ -314,6 +317,164 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     }
   }
 
+  // Batch PTR resolve
+  const [resolvingBatch, setResolvingBatch] = useState(false)
+  const [batchStatus, setBatchStatus] = useState('')
+
+  async function handleBatchResolveRdns() {
+    const pending = ips.filter(ip => !ip.address.includes(':') && !ip.purpose && !ip.reverse_dns)
+    if (pending.length === 0) {
+      setNotice('Todas las direcciones IPv4 ya tienen su Reverse DNS (PTR) resuelto.')
+      return
+    }
+
+    setResolvingBatch(true)
+    setError('')
+    let resolvedCount = 0
+
+    for (let i = 0; i < pending.length; i++) {
+      const ip = pending[i]
+      setBatchStatus(`Resolviendo ${i + 1}/${pending.length}…`)
+      try {
+        const ptr = await lookupReverseDns(ip.address)
+        if (ptr) {
+          const { error: updErr } = await supabase!
+            .from('ip_addresses')
+            .update({ purpose: ptr, reverse_dns: ptr })
+            .eq('id', ip.id)
+            .eq('workspace_id', workspaceId)
+          if (!updErr) resolvedCount++
+        }
+      } catch {
+        // continue
+      }
+    }
+
+    setResolvingBatch(false)
+    setBatchStatus('')
+    setNotice(`Resolución completada: se actualizaron ${resolvedCount} de ${pending.length} IPs con su Reverse DNS real.`)
+    await load()
+  }
+
+  // Export CSV
+  function handleExportCsv() {
+    const rows = [
+      ['IP', 'Tipo', 'Reverse DNS', 'Servidor Host', 'VPS Asignado', 'Etiqueta', 'Costo Mensual', 'Notas']
+    ]
+
+    for (const ip of filteredIps) {
+      rows.push([
+        ip.address,
+        ip.ip_type,
+        ip.purpose || ip.reverse_dns || '',
+        ip.servers?.name || '',
+        ip.assigned_vps ? `${ip.assigned_vps.vm_type === 'lxc' ? 'LXC' : 'KVM'} ${ip.assigned_vps.name}` : '',
+        ip.label || '',
+        ip.monthly_cost ? ip.monthly_cost.toString() : '',
+        (ip.notes || '').replace(/[\r\n]+/g, ' ')
+      ])
+    }
+
+    const csvContent = rows
+      .map(row => row.map(val => `"${val.replace(/"/g, '""')}"`).join(','))
+      .join('\r\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const dateStr = new Date().toISOString().slice(0, 10)
+    link.href = url
+    link.setAttribute('download', `infrapanel-ips-${dateStr}.csv`)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  // Bulk Import
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importHostId, setImportHostId] = useState('')
+  const [importAutoRdns, setImportAutoRdns] = useState(true)
+  const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState('')
+
+  async function handleBulkImport(e: FormEvent) {
+    e.preventDefault()
+    if (!importText.trim()) return
+
+    setImporting(true)
+    setError('')
+    setImportProgress('Procesando lista…')
+
+    const rawLines = importText.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const toInsert: { address: string; purpose?: string; label?: string }[] = []
+
+    for (const line of rawLines) {
+      if (line.startsWith('#') || line.toLowerCase().startsWith('ip,')) continue
+      const parts = line.split(/[,;\t]/).map(p => p.trim().replace(/^["']|["']$/g, ''))
+      const ipCandidate = parts[0]
+
+      if (ipCandidate.includes('/')) {
+        const expanded = expandCidrIpv4(ipCandidate)
+        for (const exp of expanded) {
+          toInsert.push({ address: exp, purpose: parts[1] || undefined, label: parts[2] || undefined })
+        }
+      } else if (ipCandidate) {
+        toInsert.push({ address: ipCandidate, purpose: parts[1] || undefined, label: parts[2] || undefined })
+      }
+    }
+
+    if (toInsert.length === 0) {
+      setError('No se encontraron direcciones IPv4 válidas en el texto ingresado.')
+      setImporting(false)
+      return
+    }
+
+    const uniqueIps = Array.from(new Map(toInsert.map(item => [item.address, item])).values())
+    let addedCount = 0
+
+    for (let i = 0; i < uniqueIps.length; i++) {
+      const item = uniqueIps[i]
+      setImportProgress(`Importando ${i + 1} de ${uniqueIps.length}: ${item.address}…`)
+
+      let ptr = item.purpose
+      if (!ptr && importAutoRdns) {
+        ptr = (await lookupReverseDns(item.address)) || undefined
+      }
+
+      const payload: Record<string, unknown> = {
+        workspace_id: workspaceId,
+        address: item.address,
+        server_id: importHostId || null,
+        ip_type: 'public',
+        purpose: ptr || null,
+        reverse_dns: ptr || null,
+        label: item.label || null
+      }
+
+      const { data: existing } = await supabase!
+        .from('ip_addresses')
+        .select('id')
+        .eq('workspace_id', workspaceId)
+        .eq('address', item.address)
+        .maybeSingle()
+
+      if (existing) {
+        await supabase!.from('ip_addresses').update(payload).eq('id', existing.id)
+      } else {
+        await supabase!.from('ip_addresses').insert(payload)
+      }
+      addedCount++
+    }
+
+    setImporting(false)
+    setImportProgress('')
+    setImportOpen(false)
+    setImportText('')
+    setNotice(`Se importaron / actualizaron ${addedCount} direcciones IP correctamente.`)
+    await load()
+  }
+
   // Network Handlers
   function openNewNet() {
     setEditingNet(null)
@@ -405,11 +566,39 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
           <h1>Redes e IP</h1>
           <p>Inventario general de todas tus direcciones IP, Reverse DNS (PTR), servidores y bloques CIDR.</p>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {activeTab === 'ips' ? (
-            <button className="button primary" onClick={openNewIp}>
-              <Plus size={17} /> Registrar IP
-            </button>
+            <>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={handleBatchResolveRdns}
+                disabled={resolvingBatch}
+                title="Buscar y resolver PTR mediante DNS para todas las IPs que no tengan Reverse DNS"
+              >
+                <RefreshCw size={15} className={resolvingBatch ? 'spinner' : ''} />
+                {resolvingBatch ? batchStatus : 'Resolver PTR faltantes'}
+              </button>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={handleExportCsv}
+                title="Exportar inventario de IPs a CSV"
+              >
+                <Download size={15} /> Exportar CSV
+              </button>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setImportOpen(true)}
+                title="Importar IPs masivamente desde texto o CSV"
+              >
+                <Upload size={15} /> Importar IPs
+              </button>
+              <button className="button primary" onClick={openNewIp}>
+                <Plus size={17} /> Registrar IP
+              </button>
+            </>
           ) : (
             <button className="button primary" onClick={openNewNet}>
               <Plus size={17} /> Crear Red / Bloque
@@ -507,7 +696,91 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
         </div>
       )}
 
-      {error && !ipModalOpen && !netModalOpen && <div className="alert error">{error}</div>}
+      {error && !ipModalOpen && !netModalOpen && !importOpen && <div className="alert error">{error}</div>}
+
+      {/* IN-PAGE FORM: IMPORTAR IPS MASIVAMENTE (NO MODAL) */}
+      {importOpen && (
+        <section className="inpage-card" style={{ marginBottom: '22px' }}>
+          <form onSubmit={handleBulkImport}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', borderBottom: '1px solid #f1f5f9', paddingBottom: '14px' }}>
+              <div>
+                <div className="eyebrow">IPAM MASIVO</div>
+                <h2 style={{ margin: '2px 0 0', fontSize: '18px', fontWeight: 800, color: '#1e293b' }}>
+                  Importación masiva de direcciones IP
+                </h2>
+                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                  Pegá una lista de IPs (una por línea), bloques CIDR (ej: 66.70.129.32/29) o líneas CSV.
+                </p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setImportOpen(false)}>
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="form-grid">
+              <div className="form-field">
+                <label>Asignar a Servidor Host Físico (opcional)</label>
+                <select
+                  className="input"
+                  value={importHostId}
+                  onChange={e => setImportHostId(e.target.value)}
+                >
+                  <option value="">Sin host físico / Libre</option>
+                  {servers.filter(s => !s.parent_id).map(s => (
+                    <option key={s.id} value={s.id}>
+                      🖥️ {s.name} ({s.hostname || 'Host'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-field">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '22px' }}>
+                  <input
+                    type="checkbox"
+                    checked={importAutoRdns}
+                    onChange={e => setImportAutoRdns(e.target.checked)}
+                  />
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
+                    Resolver Reverse DNS (PTR) automáticamente con DoH
+                  </span>
+                </label>
+              </div>
+
+              <div className="form-field full">
+                <label>Lista de IPs o Bloques CIDR *</label>
+                <textarea
+                  className="input"
+                  rows={6}
+                  required
+                  placeholder={`198.50.231.236\n198.50.231.237, panel01.altomarketing.net, Panel CWP\n66.70.129.32/29`}
+                  value={importText}
+                  onChange={e => setImportText(e.target.value)}
+                  style={{ fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.5 }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px', borderTop: '1px solid #f1f5f9', paddingTop: '14px' }}>
+              <button type="button" className="button secondary" onClick={() => setImportOpen(false)} disabled={importing}>
+                Cancelar
+              </button>
+              <button type="submit" className="button primary" disabled={importing || !importText.trim()}>
+                {importing ? (
+                  <>
+                    <RefreshCw size={15} className="spinner" />
+                    {importProgress || 'Importando…'}
+                  </>
+                ) : (
+                  <>
+                    <Upload size={16} /> Importar IPs ahora
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
       {/* IN-PAGE FORM: CREAR / EDITAR IP (NO MODAL) */}
       {ipModalOpen && (

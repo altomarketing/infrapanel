@@ -54,7 +54,7 @@ export default function App() {
 
   return (
     <BreadcrumbsProvider>
-      <Layout user={session.user} onSignOut={() => supabase?.auth.signOut()}>
+      <Layout user={session.user} onSignOut={() => supabase?.auth.signOut()} workspaceId={workspaceId}>
         <Routes>
           <Route path="/" element={<Dashboard workspaceId={workspaceId} />} />
           <Route path="/servers" element={<Servers workspaceId={workspaceId} />} />

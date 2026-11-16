@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Activity, ChevronDown, Command, Globe2, LayoutDashboard, LogOut, Menu, Network, Search, Server, Settings, ShieldCheck, Tags, X, Boxes } from 'lucide-react'
 import type { User } from '@supabase/supabase-js'
 import type { LucideIcon } from 'lucide-react'
 import { useBreadcrumbs } from '../lib/breadcrumbs'
+import CommandPalette from './CommandPalette'
 
 const nav: { label: string; items: { to: string; label: string; icon: LucideIcon; soon?: boolean }[] }[] = [
   { label: 'General', items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }, { to: '/servers', label: 'Servidores', icon: Server }] },
@@ -12,10 +13,33 @@ const nav: { label: string; items: { to: string; label: string; icon: LucideIcon
   { label: 'Sistema', items: [{ to: '/activity', label: 'Actividad', icon: Activity, soon: true }, { to: '/settings', label: 'Configuración', icon: Settings, soon: true }] },
 ]
 
-export default function Layout({ children, user, onSignOut }: { children: ReactNode; user: User; onSignOut: () => void }) {
+export default function Layout({
+  children,
+  user,
+  onSignOut,
+  workspaceId
+}: {
+  children: ReactNode
+  user: User
+  onSignOut: () => void
+  workspaceId: string
+}) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
   const { breadcrumbs } = useBreadcrumbs()
   const initials = (user.email || 'IP').slice(0, 2).toUpperCase()
+
+  // Global Ctrl+K / Cmd+K listener
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCommandOpen(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   return (
     <div className="app-shell">
@@ -109,7 +133,12 @@ export default function Layout({ children, user, onSignOut }: { children: ReactN
           </nav>
 
           <div className="topbar-actions">
-            <div className="search-shortcut">
+            <div
+              className="search-shortcut"
+              onClick={() => setCommandOpen(true)}
+              style={{ cursor: 'pointer', userSelect: 'none' }}
+              title="Abrir buscador global (Ctrl + K)"
+            >
               <Search size={15} />
               <span>Búsqueda</span>
               <kbd>⌘ K</kbd>
@@ -128,6 +157,12 @@ export default function Layout({ children, user, onSignOut }: { children: ReactN
           <span>v0.1.0</span>
         </footer>
       </main>
+
+      <CommandPalette
+        isOpen={commandOpen}
+        onClose={() => setCommandOpen(false)}
+        workspaceId={workspaceId}
+      />
     </div>
   )
 }

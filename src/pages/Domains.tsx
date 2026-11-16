@@ -51,6 +51,27 @@ const statusLabels: Record<DomainStatus, string> = {
   inactive: 'Inactivo'
 }
 
+export function getDomainExpirationInfo(expiresAt?: string | null) {
+  if (!expiresAt) return null
+  const expDate = new Date(expiresAt + 'T00:00:00')
+  if (isNaN(expDate.getTime())) return null
+
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const diffTime = expDate.getTime() - today.getTime()
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) {
+    return { status: 'expired' as const, days: Math.abs(diffDays), label: `Vencido hace ${Math.abs(diffDays)}d` }
+  } else if (diffDays <= 30) {
+    return { status: 'critical' as const, days: diffDays, label: diffDays === 0 ? 'Vence hoy' : `Vence en ${diffDays}d` }
+  } else if (diffDays <= 60) {
+    return { status: 'warning' as const, days: diffDays, label: `Vence en ${diffDays}d` }
+  } else {
+    return { status: 'ok' as const, days: diffDays, label: `En ${diffDays}d` }
+  }
+}
+
 export default function Domains({ workspaceId }: { workspaceId: string }) {
   useSetBreadcrumbs([{ label: 'Dominios' }])
   const [domains, setDomains] = useState<Domain[]>([])
@@ -60,6 +81,7 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [expirationFilter, setExpirationFilter] = useState<'all' | 'expiring' | 'associated'>('all')
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Domain | null>(null)
@@ -109,12 +131,30 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
     load()
   }, [load])
 
+  const expiringCount = useMemo(() => {
+    return domains.filter(d => {
+      const info = getDomainExpirationInfo(d.expires_at)
+      return Boolean(info && (info.status === 'expired' || info.status === 'critical'))
+    }).length
+  }, [domains])
+
   const filtered = useMemo(() => {
     return domains.filter(d => {
       const text = `${d.name} ${d.target_ip || ''} ${d.notes || ''} ${d.registrar_provider?.name || ''} ${d.servers?.name || ''}`.toLowerCase()
-      return text.includes(query.toLowerCase()) && (statusFilter === 'all' || d.status === statusFilter)
+      const matchesQuery = text.includes(query.toLowerCase())
+      const matchesStatus = statusFilter === 'all' || d.status === statusFilter
+
+      let matchesExp = true
+      if (expirationFilter === 'expiring') {
+        const info = getDomainExpirationInfo(d.expires_at)
+        matchesExp = Boolean(info && (info.status === 'expired' || info.status === 'critical'))
+      } else if (expirationFilter === 'associated') {
+        matchesExp = Boolean(d.target_ip || d.server_id)
+      }
+
+      return matchesQuery && matchesStatus && matchesExp
     })
-  }, [domains, query, statusFilter])
+  }, [domains, query, statusFilter, expirationFilter])
 
   function openNew() {
     setEditing(null)
@@ -246,33 +286,93 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
         </button>
       </div>
 
-      <div className="server-summary">
-        <div>
-          <span className="summary-icon">
-            <Globe2 size={18} />
-          </span>
-          <div>
-            <strong>{domains.length}</strong>
-            <span>Dominios registrados</span>
+      <div className="stats-grid">
+        <div
+          className="stat-card"
+          onClick={() => setExpirationFilter('all')}
+          style={{
+            cursor: 'pointer',
+            border: expirationFilter === 'all' ? '2px solid #2563eb' : '1px solid #e2e8f0',
+            background: expirationFilter === 'all' ? '#eff6ff' : '#fff',
+            boxShadow: expirationFilter === 'all' ? '0 4px 12px rgba(37, 99, 235, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title="Ver todos los dominios"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">Dominios Registrados</div>
+            <Globe2 size={18} style={{ color: '#2563eb' }} />
+          </div>
+          <div className="stat-value" style={{ color: '#2563eb' }}>{domains.length}</div>
+          <div className="stat-caption" style={{ color: expirationFilter === 'all' ? '#1d4ed8' : undefined, fontWeight: expirationFilter === 'all' ? 700 : 400 }}>
+            {expirationFilter === 'all' ? '✓ Mostrando todos los dominios' : 'Total en inventario (clic para ver todos)'}
           </div>
         </div>
-        <div>
-          <span className="summary-icon green">
-            <Server size={18} />
-          </span>
-          <div>
-            <strong>{domains.filter(d => d.target_ip || d.server_id).length}</strong>
-            <span>Asociados a IP o servidor</span>
+
+        <div
+          className="stat-card"
+          onClick={() => setExpirationFilter(old => (old === 'associated' ? 'all' : 'associated'))}
+          style={{
+            cursor: 'pointer',
+            border: expirationFilter === 'associated' ? '2px solid #16a34a' : '1px solid #e2e8f0',
+            background: expirationFilter === 'associated' ? '#f0fdf4' : '#fff',
+            boxShadow: expirationFilter === 'associated' ? '0 4px 12px rgba(22, 163, 74, 0.12)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title="Filtrar dominios asociados a servidores o IPs"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">Asociados a IP / Host</div>
+            <Server size={18} style={{ color: '#16a34a' }} />
+          </div>
+          <div className="stat-value" style={{ color: '#16a34a' }}>
+            {domains.filter(d => d.target_ip || d.server_id).length}
+          </div>
+          <div className="stat-caption" style={{ color: expirationFilter === 'associated' ? '#15803d' : undefined, fontWeight: expirationFilter === 'associated' ? 700 : 400 }}>
+            {expirationFilter === 'associated' ? '✓ Filtrando asociados (clic para quitar)' : 'Ruteados a servidores activos'}
           </div>
         </div>
-        <div>
-          <span className="summary-icon orange">
-            <DollarSign size={18} />
-          </span>
-          <div>
-            <strong>${totalMonthly.toFixed(2)}</strong>
-            <span>Costo mensual en dominios</span>
+
+        <div
+          className="stat-card"
+          onClick={() => setExpirationFilter(old => (old === 'expiring' ? 'all' : 'expiring'))}
+          style={{
+            cursor: 'pointer',
+            border: expirationFilter === 'expiring' ? '2px solid #ef4444' : expiringCount > 0 ? '1px solid #fecaca' : '1px solid #e2e8f0',
+            background: expirationFilter === 'expiring' ? '#fef2f2' : expiringCount > 0 ? '#fff5f5' : '#fff',
+            boxShadow: expirationFilter === 'expiring' ? '0 4px 12px rgba(239, 68, 68, 0.15)' : undefined,
+            transition: 'all 0.15s ease',
+            userSelect: 'none'
+          }}
+          title="Filtrar dominios por vencer en 30 días o vencidos"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label" style={{ color: expiringCount > 0 ? '#b91c1c' : undefined }}>
+              Vencen en ≤ 30 días
+            </div>
+            <Calendar size={18} style={{ color: expiringCount > 0 ? '#dc2626' : '#64748b' }} />
           </div>
+          <div className="stat-value" style={{ color: expiringCount > 0 ? '#dc2626' : '#0f172a' }}>
+            {expiringCount}
+          </div>
+          <div className="stat-caption" style={{ color: expiringCount > 0 ? '#b91c1c' : undefined, fontWeight: expiringCount > 0 ? 600 : 400 }}>
+            {expirationFilter === 'expiring'
+              ? '✓ Filtrando por vencer (clic para quitar)'
+              : expiringCount > 0
+              ? '⚠️ Requieren renovación (clic para filtrar)'
+              : 'Todos al día'}
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <div className="stat-label">Costo Mensual Dominios</div>
+            <DollarSign size={18} style={{ color: '#16a34a' }} />
+          </div>
+          <div className="stat-value" style={{ color: '#0f172a' }}>${totalMonthly.toFixed(2)}</div>
+          <div className="stat-caption">USD / mes estimado</div>
         </div>
       </div>
 
@@ -485,16 +585,42 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
               placeholder="Buscar por dominio, IP, servidor o notas…"
             />
           </div>
-          <div className="filter-wrap">
-            <Filter size={16} />
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-              <option value="all">Todos los estados</option>
-              {Object.entries(statusLabels).map(([val, label]) => (
-                <option key={val} value={val}>
-                  {label}
-                </option>
-              ))}
-            </select>
+
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {expirationFilter !== 'all' && (
+              <button
+                type="button"
+                className="button secondary"
+                style={{
+                  height: '34px',
+                  fontSize: '11px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  background: expirationFilter === 'expiring' ? '#fef2f2' : '#f0fdf4',
+                  borderColor: expirationFilter === 'expiring' ? '#fecaca' : '#bbf7d0',
+                  color: expirationFilter === 'expiring' ? '#b91c1c' : '#15803d',
+                  fontWeight: 600
+                }}
+                onClick={() => setExpirationFilter('all')}
+                title="Quitar filtro y ver todos los dominios"
+              >
+                <span>Filtro: <strong>{expirationFilter === 'expiring' ? 'Vencen en ≤ 30 días' : 'Asociados a IP / Host'}</strong></span>
+                <X size={13} />
+              </button>
+            )}
+
+            <div className="filter-wrap">
+              <Filter size={16} />
+              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                <option value="all">Todos los estados</option>
+                {Object.entries(statusLabels).map(([val, label]) => (
+                  <option key={val} value={val}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -587,14 +713,58 @@ export default function Domains({ workspaceId }: { workspaceId: string }) {
                       )}
                     </td>
                     <td>
-                      {d.expires_at ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10px' }}>
-                          <Calendar size={12} color="#94a3b8" />
-                          {d.expires_at}
-                        </span>
-                      ) : (
-                        <span className="muted-cell">—</span>
-                      )}
+                      {(() => {
+                        const expInfo = getDomainExpirationInfo(d.expires_at)
+                        if (!d.expires_at || !expInfo) {
+                          return <span className="muted-cell">—</span>
+                        }
+                        if (expInfo.status === 'expired') {
+                          return (
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                color: '#b91c1c',
+                                background: '#fef2f2',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #fecaca'
+                              }}
+                            >
+                              <Calendar size={11} /> {expInfo.label}
+                            </span>
+                          )
+                        }
+                        if (expInfo.status === 'critical') {
+                          return (
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                color: '#c2410c',
+                                background: '#fff7ed',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #fed7aa'
+                              }}
+                            >
+                              <Calendar size={11} /> {expInfo.label} ({d.expires_at})
+                            </span>
+                          )
+                        }
+                        return (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: '#475569' }}>
+                            <Calendar size={11} color="#94a3b8" />
+                            {d.expires_at} ({expInfo.label})
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td>
                       <span className={`status-pill ${d.status}`}>{statusLabels[d.status] || d.status}</span>

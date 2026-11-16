@@ -9,6 +9,7 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
   const [counts, setCounts] = useState({ servers: 0, providers: 0, domains: 0, networks: 0 })
   const [totalCost, setTotalCost] = useState(0)
   const [recent, setRecent] = useState<{ id: string; name: string; hostname: string | null; status: string; server_type: string; monthly_cost?: number | null }[]>([])
+  const [expiringDomains, setExpiringDomains] = useState<{ id: string; name: string; expires_at: string; days: number }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -17,7 +18,7 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
     async function load() {
       setLoading(true)
       setError('')
-      const [servers, providers, domains, networks, latest, srvCosts, ipCosts, domCosts] = await Promise.all([
+      const [servers, providers, domains, networks, latest, srvCosts, ipCosts, domCosts, domAll] = await Promise.all([
         supabase!.from('servers').select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId),
         supabase!.from('providers').select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId),
         supabase!.from('domains').select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId),
@@ -25,7 +26,8 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
         supabase!.from('servers').select('id,name,hostname,status,server_type,monthly_cost').eq('workspace_id', workspaceId).order('created_at', { ascending: false }).limit(5),
         supabase!.from('servers').select('monthly_cost').eq('workspace_id', workspaceId),
         supabase!.from('ip_addresses').select('monthly_cost').eq('workspace_id', workspaceId),
-        supabase!.from('domains').select('monthly_cost').eq('workspace_id', workspaceId)
+        supabase!.from('domains').select('monthly_cost').eq('workspace_id', workspaceId),
+        supabase!.from('domains').select('id, name, expires_at').eq('workspace_id', workspaceId)
       ])
 
       if (!alive) return
@@ -53,6 +55,22 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
         for (const r of domCosts.data) sum += Number(r.monthly_cost || 0)
       }
       setTotalCost(sum)
+
+      // Calculate expiring domains
+      const expList: { id: string; name: string; expires_at: string; days: number }[] = []
+      const now = new Date()
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+
+      for (const d of domAll.data || []) {
+        if (!d.expires_at) continue
+        const expDate = new Date(d.expires_at + 'T00:00:00')
+        if (isNaN(expDate.getTime())) continue
+        const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        if (diffDays <= 30) {
+          expList.push({ id: d.id, name: d.name, expires_at: d.expires_at, days: diffDays })
+        }
+      }
+      setExpiringDomains(expList)
 
       setLoading(false)
     }
@@ -86,6 +104,48 @@ export default function Dashboard({ workspaceId }: { workspaceId: string }) {
       </div>
 
       {error && <div className="alert error">No se pudieron cargar todos los datos: {error}</div>}
+
+      {expiringDomains.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            background: '#fff1f2',
+            border: '1px solid #fecdd3',
+            borderRadius: '10px',
+            padding: '12px 18px',
+            color: '#9f1239',
+            fontSize: '13px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '18px' }}>⚠️</span>
+            <div>
+              <strong>Atención de dominios:</strong> Tenés{' '}
+              <strong>{expiringDomains.length}</strong> dominio{expiringDomains.length > 1 ? 's' : ''} que vence
+              {expiringDomains.length > 1 ? 'n' : ''} en los próximos 30 días o ya expiraron.
+            </div>
+          </div>
+          <Link
+            to="/domains"
+            className="button small"
+            style={{
+              background: '#e11d48',
+              color: '#ffffff',
+              border: 'none',
+              fontSize: '11px',
+              fontWeight: 700,
+              padding: '6px 12px',
+              borderRadius: '6px',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Revisar dominios →
+          </Link>
+        </div>
+      )}
 
       <div className="stats-grid">
         {cards.map(card => (

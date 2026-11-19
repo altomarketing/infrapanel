@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Boxes,
   Container,
+  Copy,
   Edit2,
   ExternalLink,
   Eye,
@@ -40,7 +41,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const navigate = useNavigate()
 
   const [servers, setServers] = useState<ServerRecord[]>([])
-  const [serverIpCounts, setServerIpCounts] = useState<Record<string, number>>({})
+  const [serverIps, setServerIps] = useState<Record<string, string[]>>({})
+  const [copiedIp, setCopiedIp] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -54,7 +56,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    const [serverResult, ipCountResult] = await Promise.all([
+    const [serverResult, ipResult] = await Promise.all([
       supabase!
         .from('servers')
         .select('*, providers:provider_id(id,name), parent_server:parent_id(id,name)')
@@ -62,9 +64,8 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
         .order('name'),
       supabase!
         .from('ip_addresses')
-        .select('server_id')
+        .select('id, address, server_id, assigned_vps_id')
         .eq('workspace_id', workspaceId)
-        .not('server_id', 'is', null)
     ])
 
     if (serverResult.error) {
@@ -83,15 +84,43 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       setServers((serverResult.data || []) as ServerRecord[])
     }
 
-    if (ipCountResult.data) {
-      const counts: Record<string, number> = {}
-      for (const row of ipCountResult.data) {
-        if (row.server_id) {
-          counts[row.server_id] = (counts[row.server_id] || 0) + 1
-        }
+    let ipRows: { id: string; address?: string; server_id?: string | null; assigned_vps_id?: string | null }[] = []
+    if (ipResult.data) {
+      ipRows = ipResult.data as any
+    } else if (ipResult.error) {
+      const fallbackIps = await supabase!
+        .from('ip_addresses')
+        .select('id, address, server_id')
+        .eq('workspace_id', workspaceId)
+      if (fallbackIps.data) {
+        ipRows = fallbackIps.data as any
       }
-      setServerIpCounts(counts)
     }
+
+    const ipMap: Record<string, string[]> = {}
+
+    const addIpToServer = (serverId: string, address: string) => {
+      if (!ipMap[serverId]) ipMap[serverId] = []
+      if (!ipMap[serverId].includes(address)) {
+        ipMap[serverId].push(address)
+      }
+    }
+
+    for (const row of ipRows) {
+      if (!row.address || row.address.includes(':')) continue // Ocultar IPv6
+
+      // Asociada específicamente a una VM / VPS hija
+      if (row.assigned_vps_id) {
+        addIpToServer(row.assigned_vps_id, row.address)
+      }
+
+      // Asociada al servidor o hipervisor físico
+      if (row.server_id) {
+        addIpToServer(row.server_id, row.address)
+      }
+    }
+
+    setServerIps(ipMap)
 
     setLoading(false)
   }, [workspaceId])
@@ -132,16 +161,18 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
       if (roleFilter === 'vps' && !isVps) return false
 
       const q = query.toLowerCase().trim()
+      const ips = serverIps[server.id] || []
       const matchesQuery =
         !q ||
         server.name.toLowerCase().includes(q) ||
         (server.hostname && server.hostname.toLowerCase().includes(q)) ||
         (server.role && server.role.toLowerCase().includes(q)) ||
         (server.location && server.location.toLowerCase().includes(q)) ||
-        (server.providers?.name && server.providers.name.toLowerCase().includes(q))
+        (server.providers?.name && server.providers.name.toLowerCase().includes(q)) ||
+        ips.some(ip => ip.toLowerCase().includes(q))
       return matchesStatus && matchesQuery
     })
-  }, [servers, statusFilter, roleFilter, query])
+  }, [servers, statusFilter, roleFilter, query, serverIps])
 
   const totals = useMemo(() => {
     const physicalHosts = servers.filter(s => !s.parent_id && (s.server_type === 'dedicated' || s.server_type === 'physical'))
@@ -323,7 +354,7 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
               </thead>
               <tbody>
                 {filtered.map(server => {
-                  const ipCount = serverIpCounts[server.id] || 0
+                  const ips = serverIps[server.id] || []
                   const childCount = vmCounts[server.id] || 0
                   const isHost = !server.parent_id && (server.server_type === 'dedicated' || server.server_type === 'physical')
                   const isVps = Boolean(server.parent_id) || server.server_type === 'vps'
@@ -421,15 +452,125 @@ export default function Servers({ workspaceId }: { workspaceId: string }) {
                       </td>
 
                       <td>
-                        <button
-                          type="button"
-                          className="ip-badge"
-                          onClick={() => navigate(`/servers/${server.id}`)}
-                          title="Ver detalle de IPs"
-                        >
-                          <Globe2 size={12} />
-                          {ipCount} {ipCount === 1 ? 'IP' : 'IPs'}
-                        </button>
+                        {ips.length === 0 ? (
+                          <button
+                            type="button"
+                            className="ip-badge"
+                            onClick={() => navigate(`/servers/${server.id}`)}
+                            title="Sin IPs asignadas - Clic para ver o asignar"
+                            style={{ background: '#f8fafc', color: '#94a3b8', borderColor: '#e2e8f0', cursor: 'pointer' }}
+                          >
+                            <Globe2 size={11} /> 0 IPs
+                          </button>
+                        ) : ips.length === 1 ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <button
+                              type="button"
+                              className="ip-badge"
+                              onClick={() => navigate(`/servers/${server.id}`)}
+                              title={`IP: ${ips[0]} - Clic para ver detalle`}
+                              style={{
+                                background: '#eff6ff',
+                                color: '#1d4ed8',
+                                borderColor: '#bfdbfe',
+                                fontFamily: 'monospace',
+                                fontWeight: 600,
+                                fontSize: '11px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Globe2 size={11} />
+                              {ips[0]}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                navigator.clipboard.writeText(ips[0])
+                                setCopiedIp(ips[0])
+                                setTimeout(() => setCopiedIp(null), 1800)
+                              }}
+                              title="Copiar IP"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: '2px 4px',
+                                cursor: 'pointer',
+                                color: copiedIp === ips[0] ? '#16a34a' : '#94a3b8',
+                                display: 'inline-flex',
+                                alignItems: 'center'
+                              }}
+                            >
+                              {copiedIp === ips[0] ? (
+                                <span style={{ fontSize: '10px', fontWeight: 700, color: '#16a34a' }}>✓</span>
+                              ) : (
+                                <Copy size={11} />
+                              )}
+                            </button>
+                          </div>
+                        ) : isVps ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <button
+                              type="button"
+                              className="ip-badge"
+                              onClick={() => navigate(`/servers/${server.id}`)}
+                              title={`${ips.join(', ')} - Clic para ver detalle`}
+                              style={{
+                                background: '#eff6ff',
+                                color: '#1d4ed8',
+                                borderColor: '#bfdbfe',
+                                fontFamily: 'monospace',
+                                fontWeight: 600,
+                                fontSize: '11px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Globe2 size={11} />
+                              {ips[0]} <span style={{ fontSize: '10px', color: '#2563eb', fontWeight: 700 }}>(+{ips.length - 1})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                navigator.clipboard.writeText(ips[0])
+                                setCopiedIp(ips[0])
+                                setTimeout(() => setCopiedIp(null), 1800)
+                              }}
+                              title="Copiar IP principal"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: '2px 4px',
+                                cursor: 'pointer',
+                                color: copiedIp === ips[0] ? '#16a34a' : '#94a3b8',
+                                display: 'inline-flex',
+                                alignItems: 'center'
+                              }}
+                            >
+                              {copiedIp === ips[0] ? (
+                                <span style={{ fontSize: '10px', fontWeight: 700, color: '#16a34a' }}>✓</span>
+                              ) : (
+                                <Copy size={11} />
+                              )}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ip-badge"
+                            onClick={() => navigate(`/servers/${server.id}`)}
+                            title={`${ips.length} IPs asociadas en este servidor físico (${ips.slice(0, 3).join(', ')}${ips.length > 3 ? '...' : ''}) - Clic para ver detalle`}
+                            style={{
+                              background: '#eff6ff',
+                              color: '#1d4ed8',
+                              borderColor: '#bfdbfe',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Globe2 size={11} />
+                            {ips.length} {ips.length === 1 ? 'IP' : 'IPs'}
+                          </button>
+                        )}
                       </td>
 
                       <td>{server.providers?.name || <span className="muted-cell">Sin proveedor</span>}</td>

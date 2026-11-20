@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Check,
   Container,
@@ -7,6 +8,7 @@ import {
   DollarSign,
   Download,
   Edit2,
+  ExternalLink,
   Globe2,
   Monitor,
   Network as NetworkIcon,
@@ -131,12 +133,29 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
       const onlyIpv4 = ((ipRes.data || []) as IPAddress[])
         .filter(ip => !ip.address.includes(':'))
         .map(ip => {
-          const srv = ip.server_id ? srvMap.get(ip.server_id) : null
-          const vps = ip.assigned_vps_id ? srvMap.get(ip.assigned_vps_id) : null
+          let srv = ip.server_id ? srvMap.get(ip.server_id) : null
+          let vps = ip.assigned_vps_id ? srvMap.get(ip.assigned_vps_id) : null
+
+          // Normalización: si srv es en realidad una VM/VPS hija (tiene parent_id) y vps no estaba seteado
+          if (srv && srv.parent_id && !vps) {
+            vps = srv
+            srv = srvMap.get(srv.parent_id) || null
+          }
+
+          let physicalServer: ServerRecord | null = null
+          if (srv && !srv.parent_id) {
+            physicalServer = srv
+          } else if (vps && vps.parent_id) {
+            physicalServer = srvMap.get(vps.parent_id) || null
+          } else if (srv && srv.parent_id) {
+            physicalServer = srvMap.get(srv.parent_id) || null
+          }
+
           return {
             ...ip,
-            servers: srv ? { name: srv.name, hostname: srv.hostname } : null,
-            assigned_vps: vps ? { id: vps.id, name: vps.name, vm_id: vps.vm_id, vm_type: vps.vm_type } : null
+            servers: srv ? { id: srv.id, name: srv.name, hostname: srv.hostname } : null,
+            assigned_vps: vps ? { id: vps.id, name: vps.name, vm_id: vps.vm_id, vm_type: vps.vm_type } : null,
+            physical_server: physicalServer ? { id: physicalServer.id, name: physicalServer.name, hostname: physicalServer.hostname } : null
           }
         })
       setIps(onlyIpv4)
@@ -169,7 +188,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
           (ipFilter === 'public' && ip.ip_type === 'public') ||
           (ipFilter === 'private' && ip.ip_type === 'private')
 
-        const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''} ${ip.assigned_vps?.name || ''}`.toLowerCase()
+        const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''} ${ip.assigned_vps?.name || ''} ${ip.physical_server?.name || ''} ${ip.physical_server?.hostname || ''}`.toLowerCase()
         return matchesFilter && text.includes(query.toLowerCase())
       })
   }, [ips, ipFilter, query])
@@ -186,8 +205,8 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     return ips.reduce((sum, ip) => sum + (ip.monthly_cost || 0), 0)
   }, [ips])
 
-  const assignedCount = useMemo(() => ips.filter(ip => ip.server_id).length, [ips])
-  const freeCount = useMemo(() => ips.filter(ip => !ip.server_id).length, [ips])
+  const assignedCount = useMemo(() => ips.filter(ip => ip.server_id || ip.assigned_vps_id).length, [ips])
+  const freeCount = useMemo(() => ips.filter(ip => !ip.server_id && !ip.assigned_vps_id).length, [ips])
 
   function copyToClipboard(text: string) {
     void navigator.clipboard.writeText(text)
@@ -367,7 +386,7 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
         ip.address,
         ip.ip_type,
         ip.purpose || ip.reverse_dns || '',
-        ip.servers?.name || '',
+        ip.physical_server?.name || ip.servers?.name || '',
         ip.assigned_vps ? `${ip.assigned_vps.vm_type === 'lxc' ? 'LXC' : 'KVM'} ${ip.assigned_vps.name}` : '',
         ip.label || '',
         ip.monthly_cost ? ip.monthly_cost.toString() : '',
@@ -1138,7 +1157,8 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                     <th>Dirección IP / Bloque</th>
                     <th>Tipo</th>
                     <th>Reverse DNS (PTR)</th>
-                    <th>Servidor Asignado</th>
+                    <th>Servidor Físico</th>
+                    <th>VPS / Instancia Asignada</th>
                     <th>Etiqueta / Uso</th>
                     <th>Costo / Mes</th>
                     <th>
@@ -1178,32 +1198,81 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                           )}
                         </td>
                         <td>
-                          {ip.servers?.name || ip.assigned_vps?.name ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                              {ip.servers?.name && (
-                                <span className="ip-badge" style={{ background: '#f8fafc', color: '#334155', borderColor: '#e2e8f0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                  <Server size={11} /> {ip.servers.name}
-                                </span>
-                              )}
-                              {ip.assigned_vps && (
-                                <span
-                                  className="ip-badge"
-                                  style={{
-                                    background: ip.assigned_vps.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4',
-                                    color: ip.assigned_vps.vm_type === 'lxc' ? '#0891b2' : '#16a34a',
-                                    borderColor: ip.assigned_vps.vm_type === 'lxc' ? '#a5f3fc' : '#bbf7d0',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '3px'
-                                  }}
-                                >
-                                  {ip.assigned_vps.vm_type === 'lxc' ? <Container size={10} /> : <Monitor size={10} />}
-                                  {ip.assigned_vps.vm_type === 'lxc' ? 'LXC' : 'KVM'} {ip.assigned_vps.vm_id ? `[${ip.assigned_vps.vm_id}] ` : ''}{ip.assigned_vps.name}
-                                </span>
-                              )}
-                            </div>
+                          {ip.physical_server ? (
+                            <Link
+                              to={`/servers/${ip.physical_server.id}`}
+                              className="ip-badge"
+                              style={{
+                                background: '#eff6ff',
+                                color: '#1d4ed8',
+                                borderColor: '#bfdbfe',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                textDecoration: 'none',
+                                fontWeight: 600,
+                                fontSize: '11px',
+                                padding: '3px 8px',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title={`Servidor Físico: ${ip.physical_server.name} (${ip.physical_server.hostname || 'Sin hostname'}) - Clic para ver detalle`}
+                            >
+                              <Server size={12} style={{ color: '#2563eb', flexShrink: 0 }} />
+                              <span>{ip.physical_server.name}</span>
+                              <ExternalLink size={10} style={{ opacity: 0.6, flexShrink: 0 }} />
+                            </Link>
                           ) : (
-                            <span className="ip-badge" style={{ background: '#fffbeb', color: '#b45309', borderColor: '#fef3c7' }}>
+                            <span
+                              className="ip-badge"
+                              style={{ background: '#f8fafc', color: '#94a3b8', borderColor: '#e2e8f0', fontSize: '10px' }}
+                              title="Sin servidor físico asignado"
+                            >
+                              —
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {ip.assigned_vps ? (
+                            <Link
+                              to={`/servers/${ip.assigned_vps.id}`}
+                              className="ip-badge"
+                              style={{
+                                background: ip.assigned_vps.vm_type === 'lxc' ? '#ecfeff' : '#f0fdf4',
+                                color: ip.assigned_vps.vm_type === 'lxc' ? '#0891b2' : '#16a34a',
+                                borderColor: ip.assigned_vps.vm_type === 'lxc' ? '#a5f3fc' : '#bbf7d0',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                textDecoration: 'none',
+                                fontWeight: 600,
+                                fontSize: '11px',
+                                padding: '3px 8px',
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                              title={`VPS / Contenedor: ${ip.assigned_vps.name} - Clic para ver detalle`}
+                            >
+                              {ip.assigned_vps.vm_type === 'lxc' ? <Container size={11} style={{ flexShrink: 0 }} /> : <Monitor size={11} style={{ flexShrink: 0 }} />}
+                              <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 4px', borderRadius: '3px', background: 'rgba(0,0,0,0.06)' }}>
+                                {ip.assigned_vps.vm_type === 'lxc' ? 'LXC' : 'KVM'}
+                              </span>
+                              <span>{ip.assigned_vps.vm_id ? `[${ip.assigned_vps.vm_id}] ` : ''}{ip.assigned_vps.name}</span>
+                              <ExternalLink size={10} style={{ opacity: 0.6, flexShrink: 0 }} />
+                            </Link>
+                          ) : ip.physical_server ? (
+                            <span
+                              className="ip-badge"
+                              style={{ background: '#f8fafc', color: '#64748b', borderColor: '#e2e8f0', fontSize: '10px' }}
+                              title="Asignada al servidor físico directamente (sin VPS hijo)"
+                            >
+                              Host directo / Pool
+                            </span>
+                          ) : (
+                            <span
+                              className="ip-badge"
+                              style={{ background: '#fffbeb', color: '#b45309', borderColor: '#fef3c7', fontSize: '10px' }}
+                            >
                               Libre / Sin servidor
                             </span>
                           )}

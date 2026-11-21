@@ -140,6 +140,13 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
           if (srv && srv.parent_id && !vps) {
             vps = srv
             srv = srvMap.get(srv.parent_id) || null
+            if (srv && vps) {
+              supabase!
+                .from('ip_addresses')
+                .update({ server_id: srv.id, assigned_vps_id: vps.id })
+                .eq('id', ip.id)
+                .then()
+            }
           }
 
           let physicalServer: ServerRecord | null = null
@@ -262,11 +269,18 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     let srvId = ipForm.server_id || null
     let vpsId = ipForm.assigned_vps_id || null
 
-    // Si se asignó un VPS pero no se eligió server_id, inferir el host físico desde el VPS
-    if (vpsId && !srvId) {
+    // Si se asignó un VPS, asegurar que server_id sea siempre el servidor físico host
+    if (vpsId) {
       const vpsObj = servers.find(s => s.id === vpsId)
       if (vpsObj && vpsObj.parent_id) {
         srvId = vpsObj.parent_id
+      }
+    } else if (srvId) {
+      // Si srvId era en realidad un VPS (con parent_id), moverlo a vpsId y apuntar srvId al host
+      const srvObj = servers.find(s => s.id === srvId)
+      if (srvObj && srvObj.parent_id) {
+        vpsId = srvObj.id
+        srvId = srvObj.parent_id
       }
     }
 

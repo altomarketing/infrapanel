@@ -222,37 +222,69 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       }
     } else {
       // For physical host: load direct IPs and also any IPs assigned to child VMs
-      const { data: directIps } = await supabase!
-        .from('ip_addresses')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .eq('server_id', serverId)
-        .order('address', { ascending: true })
-
       const { data: hostVms } = await supabase!
         .from('servers')
         .select('id')
         .eq('parent_id', serverId)
+        .eq('workspace_id', workspaceId)
 
       const vmIds = (hostVms || []).map(v => v.id)
-      let vpsIps: any[] = []
-      if (vmIds.length > 0) {
-        const { data: vData } = await supabase!
+
+      const [resDirect, resAssigned, resLegacy] = await Promise.all([
+        supabase!
           .from('ip_addresses')
           .select('*')
           .eq('workspace_id', workspaceId)
-          .in('assigned_vps_id', vmIds)
-        vpsIps = vData || []
-      }
+          .eq('server_id', serverId)
+          .order('address', { ascending: true }),
+        vmIds.length > 0
+          ? supabase!
+              .from('ip_addresses')
+              .select('*')
+              .eq('workspace_id', workspaceId)
+              .in('assigned_vps_id', vmIds)
+          : Promise.resolve({ data: [] }),
+        vmIds.length > 0
+          ? supabase!
+              .from('ip_addresses')
+              .select('*')
+              .eq('workspace_id', workspaceId)
+              .in('server_id', vmIds)
+          : Promise.resolve({ data: [] })
+      ])
+
+      const rawList = [
+        ...((resDirect.data || []) as IPAddress[]),
+        ...((resAssigned.data || []) as IPAddress[]),
+        ...((resLegacy.data || []) as IPAddress[])
+      ]
 
       const map = new Map<string, IPAddress>()
-      for (const ip of directIps || []) map.set(ip.id, ip as IPAddress)
-      for (const ip of vpsIps) {
-        map.set(ip.id, ip as IPAddress)
-        if (ip.server_id !== serverId) {
-          // Normalize server_id to point to physical host
-          supabase!.from('ip_addresses').update({ server_id: serverId }).eq('id', ip.id).then()
+      for (const rawIp of rawList) {
+        const ip = { ...rawIp }
+
+        // Normalization: if server_id is one of the child VMs, normalize assigned_vps_id and server_id
+        if (vmIds.includes(ip.server_id || '')) {
+          const actualVmId = ip.server_id
+          ip.assigned_vps_id = actualVmId
+          ip.server_id = serverId
+          // Auto-repair in database in background so it's permanently consistent
+          supabase!
+            .from('ip_addresses')
+            .update({ server_id: serverId, assigned_vps_id: actualVmId })
+            .eq('id', ip.id)
+            .then()
+        } else if (ip.assigned_vps_id && vmIds.includes(ip.assigned_vps_id) && ip.server_id !== serverId) {
+          // If assigned to a child VM of this host, make sure server_id points to this physical host
+          ip.server_id = serverId
+          supabase!
+            .from('ip_addresses')
+            .update({ server_id: serverId })
+            .eq('id', ip.id)
+            .then()
         }
+
+        map.set(ip.id, ip as IPAddress)
       }
       ipList = Array.from(map.values())
     }
@@ -438,9 +470,17 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
   async function handleQuickAssignIp(ipId: string, vpsId: string | null) {
     if (!ipId) return
     setError('')
+    const hostId = isChildVps && server?.parent_id ? server.parent_id : serverId
+    const updatePayload: Record<string, unknown> = {
+      assigned_vps_id: vpsId || null
+    }
+    if (hostId) {
+      updatePayload.server_id = hostId
+    }
+
     const { error: err } = await supabase!
       .from('ip_addresses')
-      .update({ assigned_vps_id: vpsId || null })
+      .update(updatePayload)
       .eq('id', ipId)
       .eq('workspace_id', workspaceId)
 
@@ -1541,7 +1581,7 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                 </thead>
                 <tbody>
                   {filteredVms.map(vm => {
-                    const assignedIp = ips.find(ip => ip.assigned_vps_id === vm.id) || (vm.ip_addresses && vm.ip_addresses[0])
+                    const assignedIp = ips.find(ip => ip.assigned_vps_id === vm.id || ip.server_id === vm.id) || (vm.ip_addresses && vm.ip_addresses[0])
                     const isLxc = vm.vm_type === 'lxc'
                     const vmConsoleUrl = proxmoxWebUrl && vm.vm_id ? `${proxmoxWebUrl}/#v1:0:=${isLxc ? 'lxc' : 'qemu'}/${vm.vm_id}` : null
 
@@ -1621,9 +1661,9 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                                 <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
                                   {assignedIp.address}
                                 </span>
-                                {assignedIp.reverse_dns && (
+                                {(assignedIp.reverse_dns || assignedIp.purpose) && (
                                   <div style={{ fontSize: '10px', color: '#2563eb', fontFamily: 'monospace' }}>
-                                    {assignedIp.reverse_dns}
+                                    {assignedIp.reverse_dns || assignedIp.purpose}
                                   </div>
                                 )}
                               </div>
@@ -1668,10 +1708,10 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                             >
                               <option value="" disabled>+ Asociar IP failover…</option>
                               {ips
-                                .filter(ip => !ip.assigned_vps_id || ip.assigned_vps_id === vm.id)
+                                .filter(ip => (!ip.assigned_vps_id && ip.server_id !== vm.id) || ip.assigned_vps_id === vm.id || ip.server_id === vm.id)
                                 .map(ip => (
                                   <option key={ip.id} value={ip.id}>
-                                    {ip.address} {ip.reverse_dns ? `(${ip.reverse_dns})` : ''}
+                                    {ip.address} {(ip.reverse_dns || ip.purpose) ? `(${ip.reverse_dns || ip.purpose})` : ''}
                                   </option>
                                 ))}
                               <option value="__NEW__">➕ Cargar nueva IP failover…</option>
@@ -1828,10 +1868,10 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                 >
                   <option value="" disabled>Seleccionar IP failover del Host…</option>
                   {parentIps
-                    .filter(p => !p.assigned_vps_id || p.assigned_vps_id === serverId)
+                    .filter(p => !p.assigned_vps_id || p.assigned_vps_id === serverId || p.server_id === serverId)
                     .map(p => (
                       <option key={p.id} value={p.id}>
-                        {p.address} {p.reverse_dns ? `(${p.reverse_dns})` : ''} {p.assigned_vps_id === serverId ? '✓ Ya asignada' : ''}
+                        {p.address} {(p.reverse_dns || p.purpose) ? `(${p.reverse_dns || p.purpose})` : ''} {p.assigned_vps_id === serverId ? '✓ Ya asignada' : ''}
                       </option>
                     ))}
                 </select>

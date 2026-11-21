@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
+  AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   Boxes,
   Check,
+  CheckCircle2,
   ChevronRight,
   Container,
   Copy,
@@ -18,12 +21,14 @@ import {
   RefreshCw,
   Search,
   Server,
+  ShieldCheck,
   Trash2,
   Upload,
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { lookupReverseDns, expandCidrIpv4 } from '../lib/dns'
+import { lookupReverseDns, expandCidrIpv4, verifyFcrdns } from '../lib/dns'
+import type { FcrdnsResult } from '../lib/dns'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import { parseQmListOutput, parseProxmoxApiResponse } from '../lib/proxmox'
 import type { IPAddress, Server as ServerRecord, Domain } from '../types'
@@ -130,6 +135,12 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
   const [ipQuery, setIpQuery] = useState('')
   const [vmQuery, setVmQuery] = useState('')
   const [vmTypeFilter, setVmTypeFilter] = useState<'all' | 'qemu' | 'lxc'>('all')
+
+  // FCrDNS verification state
+  const [fcrdnsResults, setFcrdnsResults] = useState<Record<string, FcrdnsResult>>({})
+  const [auditingFcrdns, setAuditingFcrdns] = useState(false)
+  const [verifyingIp, setVerifyingIp] = useState<string | null>(null)
+  const [fixingIp, setFixingIp] = useState<string | null>(null)
 
   // Dynamic breadcrumbs
   useSetBreadcrumbs(
@@ -492,6 +503,62 @@ export default function ServerDetail({ workspaceId }: { workspaceId: string }) {
       setNotice(vpsId ? `IP asociada a ${vmName} correctamente.` : 'IP liberada (asignada al Host base).')
       await loadIps()
       await loadVms()
+    }
+  }
+
+  // FCrDNS handlers
+  const handleVerifySingleIp = async (ip: IPAddress) => {
+    setVerifyingIp(ip.address)
+    try {
+      const res = await verifyFcrdns(ip.address, ip.reverse_dns || ip.purpose)
+      setFcrdnsResults(prev => ({ ...prev, [ip.address]: res }))
+    } catch (e) {
+      console.error('Error verifying FCrDNS:', e)
+    } finally {
+      setVerifyingIp(null)
+    }
+  }
+
+  const handleAuditFcrdns = async () => {
+    if (auditingFcrdns || ips.length === 0) return
+    setAuditingFcrdns(true)
+    const results: Record<string, FcrdnsResult> = { ...fcrdnsResults }
+    for (const ip of ips) {
+      try {
+        const res = await verifyFcrdns(ip.address, ip.reverse_dns || ip.purpose)
+        results[ip.address] = res
+        setFcrdnsResults({ ...results })
+      } catch {
+        // continue
+      }
+    }
+    setAuditingFcrdns(false)
+  }
+
+  const handleFixPtr = async (ip: IPAddress) => {
+    setFixingIp(ip.id)
+    try {
+      const livePtr = await lookupReverseDns(ip.address)
+      if (livePtr) {
+        await supabase!
+          .from('ip_addresses')
+          .update({
+            purpose: livePtr,
+            reverse_dns: livePtr
+          })
+          .eq('id', ip.id)
+
+        const refreshed = await verifyFcrdns(ip.address, livePtr)
+        setFcrdnsResults(prev => ({ ...prev, [ip.address]: refreshed }))
+        setNotice(`Reverse DNS actualizado a "${livePtr}"`)
+        await loadIps()
+      } else {
+        setNotice(`No se encontró registro PTR activo en el datacenter para ${ip.address}`)
+      }
+    } catch (err: any) {
+      setError(`Error al corregir PTR: ${err.message}`)
+    } finally {
+      setFixingIp(null)
     }
   }
 
@@ -1658,9 +1725,26 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                           {assignedIp ? (
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                               <div>
-                                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
-                                  {assignedIp.address}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0f172a', fontSize: '12px' }}>
+                                    {assignedIp.address}
+                                  </span>
+                                  {fcrdnsResults[assignedIp.address]?.status === 'valid' && (
+                                    <span title={fcrdnsResults[assignedIp.address].detail} style={{ color: '#16a34a', display: 'inline-flex' }}>
+                                      <CheckCircle2 size={12} />
+                                    </span>
+                                  )}
+                                  {fcrdnsResults[assignedIp.address]?.status === 'mismatch' && (
+                                    <span title={fcrdnsResults[assignedIp.address].detail} style={{ color: '#dc2626', display: 'inline-flex' }}>
+                                      <AlertTriangle size={12} />
+                                    </span>
+                                  )}
+                                  {fcrdnsResults[assignedIp.address]?.status === 'no_a_record' && (
+                                    <span title={fcrdnsResults[assignedIp.address].detail} style={{ color: '#b45309', display: 'inline-flex' }}>
+                                      <AlertCircle size={12} />
+                                    </span>
+                                  )}
+                                </div>
                                 {(assignedIp.reverse_dns || assignedIp.purpose) && (
                                   <div style={{ fontSize: '10px', color: '#2563eb', fontFamily: 'monospace' }}>
                                     {assignedIp.reverse_dns || assignedIp.purpose}
@@ -1822,6 +1906,17 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                   style={{ height: '34px', fontSize: '12px' }}
                 />
               </div>
+              <button
+                type="button"
+                className="button secondary"
+                style={{ height: '34px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                onClick={handleAuditFcrdns}
+                disabled={auditingFcrdns || ips.length === 0}
+                title="Verifica la consistencia Forward-Confirmed Reverse DNS de las IPs"
+              >
+                <ShieldCheck size={15} className={auditingFcrdns ? 'spinner' : ''} style={{ color: '#2563eb' }} />
+                {auditingFcrdns ? 'Auditando…' : 'Auditar FCrDNS'}
+              </button>
               <button
                 type="button"
                 className="button primary"
@@ -2114,9 +2209,76 @@ pveum acl modify / -token 'root@pam!infrapanel' -role PVEAuditor`}
                               </button>
                             </div>
                           ) : (
-                            <span style={{ fontFamily: 'monospace', fontSize: '12px', color: ptrHost !== '—' ? '#2563eb' : '#94a3b8' }}>
-                              {ptrHost}
-                            </span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontFamily: 'monospace', fontSize: '12px', color: ptrHost !== '—' ? '#2563eb' : '#94a3b8' }}>
+                                  {ptrHost}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="icon-button"
+                                  style={{ width: '20px', height: '20px', padding: 0 }}
+                                  title="Verificar consistencia FCrDNS de esta IP"
+                                  onClick={() => handleVerifySingleIp(ip)}
+                                  disabled={verifyingIp === ip.address}
+                                >
+                                  <RefreshCw size={11} className={verifyingIp === ip.address ? 'spinner' : ''} />
+                                </button>
+                              </div>
+
+                              {fcrdnsResults[ip.address] && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                                  {fcrdnsResults[ip.address].status === 'valid' && (
+                                    <span
+                                      className="ip-badge"
+                                      style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0', fontSize: '9px', gap: '3px' }}
+                                      title={fcrdnsResults[ip.address].detail}
+                                    >
+                                      <CheckCircle2 size={10} /> FCrDNS Válido
+                                    </span>
+                                  )}
+                                  {fcrdnsResults[ip.address].status === 'mismatch' && (
+                                    <span
+                                      className="ip-badge"
+                                      style={{ background: '#fef2f2', color: '#dc2626', borderColor: '#fecaca', fontSize: '9px', gap: '3px' }}
+                                      title={fcrdnsResults[ip.address].detail}
+                                    >
+                                      <AlertTriangle size={10} /> Mismatch
+                                    </span>
+                                  )}
+                                  {fcrdnsResults[ip.address].status === 'no_a_record' && (
+                                    <span
+                                      className="ip-badge"
+                                      style={{ background: '#fffbeb', color: '#b45309', borderColor: '#fef3c7', fontSize: '9px', gap: '3px' }}
+                                      title={fcrdnsResults[ip.address].detail}
+                                    >
+                                      <AlertCircle size={10} /> NXDOMAIN (Sin A)
+                                    </span>
+                                  )}
+                                  {fcrdnsResults[ip.address].status === 'no_ptr' && (
+                                    <span
+                                      className="ip-badge"
+                                      style={{ background: '#f8fafc', color: '#64748b', borderColor: '#e2e8f0', fontSize: '9px', gap: '3px' }}
+                                      title={fcrdnsResults[ip.address].detail}
+                                    >
+                                      Sin PTR
+                                    </span>
+                                  )}
+                                  {(fcrdnsResults[ip.address].status === 'mismatch' || fcrdnsResults[ip.address].status === 'no_a_record') && (
+                                    <button
+                                      type="button"
+                                      className="button small"
+                                      style={{ height: '20px', fontSize: '9px', padding: '0 6px', color: '#2563eb', borderColor: '#bfdbfe', background: '#eff6ff', cursor: 'pointer', fontWeight: 600 }}
+                                      title="Consultar y corregir PTR con el valor real de DoH"
+                                      onClick={() => handleFixPtr(ip)}
+                                      disabled={fixingIp === ip.id}
+                                    >
+                                      {fixingIp === ip.id ? 'Corrigiendo…' : 'Corregir PTR'}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </td>
 

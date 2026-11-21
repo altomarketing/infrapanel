@@ -89,3 +89,128 @@ export function expandCidrIpv4(cidr: string): string[] {
   return ips
 }
 
+/**
+ * Realiza una consulta directa tipo A (Forward DNS) para obtener las IPs IPv4 que resuelve un hostname.
+ */
+export async function lookupForwardDns(hostname: string): Promise<string[]> {
+  const clean = hostname.trim().replace(/^https?:\/\//i, '').split('/')[0].replace(/\.$/, '')
+  if (!clean || clean.includes(' ') || !clean.includes('.')) return []
+
+  // 1. Google DoH
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3500)
+    const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(clean)}&type=A`, {
+      headers: { Accept: 'application/dns-json' },
+      signal: controller.signal
+    })
+    clearTimeout(timeout)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.Answer && Array.isArray(data.Answer)) {
+        const ips = data.Answer
+          .filter((a: any) => a.type === 1 && typeof a.data === 'string' && !a.data.includes(':'))
+          .map((a: any) => a.data.trim())
+        if (ips.length > 0) return ips
+      }
+    }
+  } catch {
+    // Continuar con Cloudflare
+  }
+
+  // 2. Cloudflare DoH fallback
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3500)
+    const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(clean)}&type=A`, {
+      headers: { Accept: 'application/dns-json' },
+      signal: controller.signal
+    })
+    clearTimeout(timeout)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.Answer && Array.isArray(data.Answer)) {
+        const ips = data.Answer
+          .filter((a: any) => a.type === 1 && typeof a.data === 'string' && !a.data.includes(':'))
+          .map((a: any) => a.data.trim())
+        if (ips.length > 0) return ips
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return []
+}
+
+export type FcrdnsStatus = 'valid' | 'mismatch' | 'no_a_record' | 'no_ptr' | 'unverified'
+
+export interface FcrdnsResult {
+  ip: string
+  ptr: string | null
+  forwardIps: string[]
+  status: FcrdnsStatus
+  detail: string
+  checkedAt: string
+}
+
+/**
+ * Valida Forward-Confirmed Reverse DNS (FCrDNS):
+ * 1. Toma la IP y su hostname Reverse DNS (PTR).
+ * 2. Resuelve el registro A del hostname.
+ * 3. Confirma si la IP original está entre las IPs que resuelve el hostname.
+ */
+export async function verifyFcrdns(ipAddress: string, existingPtr?: string | null): Promise<FcrdnsResult> {
+  const cleanIp = ipAddress.trim().split('/')[0]
+  const now = new Date().toISOString()
+
+  let ptr = existingPtr?.trim() || null
+  if (!ptr) {
+    ptr = await lookupReverseDns(cleanIp)
+  }
+
+  if (!ptr) {
+    return {
+      ip: cleanIp,
+      ptr: null,
+      forwardIps: [],
+      status: 'no_ptr',
+      detail: 'Sin registro Reverse DNS (PTR)',
+      checkedAt: now
+    }
+  }
+
+  const forwardIps = await lookupForwardDns(ptr)
+  if (forwardIps.length === 0) {
+    return {
+      ip: cleanIp,
+      ptr,
+      forwardIps: [],
+      status: 'no_a_record',
+      detail: `El PTR "${ptr}" no tiene registro A (NXDOMAIN)`,
+      checkedAt: now
+    }
+  }
+
+  if (forwardIps.includes(cleanIp)) {
+    return {
+      ip: cleanIp,
+      ptr,
+      forwardIps,
+      status: 'valid',
+      detail: `FCrDNS verificado: ${ptr} ↔ ${cleanIp}`,
+      checkedAt: now
+    }
+  }
+
+  return {
+    ip: cleanIp,
+    ptr,
+    forwardIps,
+    status: 'mismatch',
+    detail: `Mismatch: el PTR "${ptr}" apunta a ${forwardIps.join(', ')} en lugar de ${cleanIp}`,
+    checkedAt: now
+  }
+}
+
+

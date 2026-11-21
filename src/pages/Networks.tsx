@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import {
+  AlertCircle,
+  AlertTriangle,
   Check,
+  CheckCircle2,
   Container,
   Copy,
   DollarSign,
@@ -17,13 +20,15 @@ import {
   RefreshCw,
   Search,
   Server,
+  ShieldCheck,
   Trash2,
   Upload,
   Wifi,
   X
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { lookupReverseDns, expandCidrIpv4 } from '../lib/dns'
+import { lookupReverseDns, expandCidrIpv4, verifyFcrdns } from '../lib/dns'
+import type { FcrdnsResult } from '../lib/dns'
 import { useSetBreadcrumbs } from '../lib/breadcrumbs'
 import type { IPAddress, Network, Server as ServerRecord } from '../types'
 
@@ -80,6 +85,14 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
   // Filters
   const [query, setQuery] = useState('')
   const [ipFilter, setIpFilter] = useState<'all' | 'assigned' | 'free' | 'public' | 'private'>('all')
+  const [fcrdnsFilter, setFcrdnsFilter] = useState<'all' | 'valid' | 'mismatch' | 'no_a' | 'no_ptr'>('all')
+
+  // FCrDNS Audit state
+  const [fcrdnsResults, setFcrdnsResults] = useState<Record<string, FcrdnsResult>>({})
+  const [auditingFcrdns, setAuditingFcrdns] = useState(false)
+  const [auditStatus, setAuditStatus] = useState('')
+  const [verifyingIp, setVerifyingIp] = useState<string | null>(null)
+  const [fixingIp, setFixingIp] = useState<string | null>(null)
 
   // IP Modal
   const [ipModalOpen, setIpModalOpen] = useState(false)
@@ -183,6 +196,18 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     load()
   }, [load])
 
+  // FCrDNS Stats
+  const fcrdnsStats = useMemo(() => {
+    const list = Object.values(fcrdnsResults)
+    return {
+      total: list.length,
+      valid: list.filter(r => r.status === 'valid').length,
+      mismatch: list.filter(r => r.status === 'mismatch').length,
+      noA: list.filter(r => r.status === 'no_a_record').length,
+      noPtr: list.filter(r => r.status === 'no_ptr').length
+    }
+  }, [fcrdnsResults])
+
   // Filtered IPs (Always hide IPv6)
   const filteredIps = useMemo(() => {
     return ips
@@ -195,10 +220,26 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
           (ipFilter === 'public' && ip.ip_type === 'public') ||
           (ipFilter === 'private' && ip.ip_type === 'private')
 
+        if (!matchesFilter) return false
+
+        if (fcrdnsFilter === 'valid') {
+          const r = fcrdnsResults[ip.address]
+          if (!r || r.status !== 'valid') return false
+        } else if (fcrdnsFilter === 'mismatch') {
+          const r = fcrdnsResults[ip.address]
+          if (!r || r.status !== 'mismatch') return false
+        } else if (fcrdnsFilter === 'no_a') {
+          const r = fcrdnsResults[ip.address]
+          if (!r || r.status !== 'no_a_record') return false
+        } else if (fcrdnsFilter === 'no_ptr') {
+          const r = fcrdnsResults[ip.address]
+          if (!r || r.status !== 'no_ptr') return false
+        }
+
         const text = `${ip.address} ${ip.purpose || ''} ${ip.label || ''} ${ip.notes || ''} ${ip.servers?.name || ''} ${ip.servers?.hostname || ''} ${ip.assigned_vps?.name || ''} ${ip.physical_server?.name || ''} ${ip.physical_server?.hostname || ''}`.toLowerCase()
-        return matchesFilter && text.includes(query.toLowerCase())
+        return text.includes(query.toLowerCase())
       })
-  }, [ips, ipFilter, query])
+  }, [ips, ipFilter, fcrdnsFilter, fcrdnsResults, query])
 
   // Filtered Networks
   const filteredNets = useMemo(() => {
@@ -387,6 +428,86 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
     setBatchStatus('')
     setNotice(`Resolución completada: se actualizaron ${resolvedCount} de ${pending.length} IPs con su Reverse DNS real.`)
     await load()
+  }
+
+  // Audit FCrDNS for all displayed IPs
+  async function handleAuditFcrdns() {
+    if (auditingFcrdns) return
+    setAuditingFcrdns(true)
+    setError('')
+
+    const listToAudit = filteredIps.length > 0 ? filteredIps : ips
+    const total = listToAudit.length
+    const resultsMap: Record<string, FcrdnsResult> = { ...fcrdnsResults }
+
+    let count = 0
+    let validCount = 0
+    let mismatchCount = 0
+    let noACount = 0
+
+    const chunkSize = 3
+    for (let i = 0; i < listToAudit.length; i += chunkSize) {
+      const chunk = listToAudit.slice(i, i + chunkSize)
+      await Promise.all(
+        chunk.map(async ip => {
+          const res = await verifyFcrdns(ip.address, ip.purpose || ip.reverse_dns)
+          resultsMap[ip.address] = res
+          if (res.status === 'valid') validCount++
+          else if (res.status === 'mismatch') mismatchCount++
+          else if (res.status === 'no_a_record') noACount++
+        })
+      )
+      count = Math.min(count + chunk.length, total)
+      setAuditStatus(`Auditando FCrDNS: ${count}/${total}…`)
+      setFcrdnsResults({ ...resultsMap })
+    }
+
+    setAuditingFcrdns(false)
+    setAuditStatus('')
+    setNotice(`Auditoría FCrDNS finalizada: ${validCount} confirmadas, ${mismatchCount} desalineadas, ${noACount} sin registro A.`)
+  }
+
+  // Single IP verify
+  async function handleVerifySingleIp(ip: IPAddress) {
+    setVerifyingIp(ip.address)
+    try {
+      const res = await verifyFcrdns(ip.address, ip.purpose || ip.reverse_dns)
+      setFcrdnsResults(prev => ({ ...prev, [ip.address]: res }))
+    } finally {
+      setVerifyingIp(null)
+    }
+  }
+
+  // Fix PTR using live DoH
+  async function handleFixPtr(ip: IPAddress) {
+    setFixingIp(ip.id)
+    setError('')
+    try {
+      const realPtr = await lookupReverseDns(ip.address)
+      if (!realPtr) {
+        setError(`No se detectó ningún PTR público para ${ip.address}.`)
+        setFixingIp(null)
+        return
+      }
+      const { error: updErr } = await supabase!
+        .from('ip_addresses')
+        .update({ purpose: realPtr, reverse_dns: realPtr })
+        .eq('id', ip.id)
+        .eq('workspace_id', workspaceId)
+
+      if (updErr) {
+        setError(`Error al actualizar PTR: ${updErr.message}`)
+      } else {
+        setNotice(`Reverse DNS actualizado a ${realPtr} correctamente.`)
+        const res = await verifyFcrdns(ip.address, realPtr)
+        setFcrdnsResults(prev => ({ ...prev, [ip.address]: res }))
+        await load()
+      }
+    } catch (e: any) {
+      setError(`Error: ${e?.message || 'Fallo al consultar DoH'}`)
+    } finally {
+      setFixingIp(null)
+    }
   }
 
   // Export CSV
@@ -611,6 +732,22 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
               >
                 <RefreshCw size={15} className={resolvingBatch ? 'spinner' : ''} />
                 {resolvingBatch ? batchStatus : 'Resolver PTR faltantes'}
+              </button>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={handleAuditFcrdns}
+                disabled={auditingFcrdns}
+                style={{
+                  background: '#f0fdf4',
+                  color: '#15803d',
+                  borderColor: '#bbf7d0',
+                  fontWeight: 600
+                }}
+                title="Auditar consistencia FCrDNS: verifica si los registros PTR y A coinciden para prevenir SPAM y desalineaciones"
+              >
+                <ShieldCheck size={15} className={auditingFcrdns ? 'spinner' : ''} />
+                {auditingFcrdns ? auditStatus : 'Auditar FCrDNS'}
               </button>
               <button
                 type="button"
@@ -1148,6 +1285,109 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
             )}
           </div>
 
+          {/* FCrDNS Auditing Stats Banner */}
+          {fcrdnsStats.total > 0 && (
+            <div
+              style={{
+                margin: '0 20px 14px 20px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0',
+                background: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                flexWrap: 'wrap'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ShieldCheck size={18} style={{ color: '#16a34a' }} />
+                <div>
+                  <strong style={{ fontSize: '13px', color: '#0f172a' }}>Auditoría FCrDNS ({fcrdnsStats.total} IPs analizadas)</strong>
+                  <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '6px' }}>
+                    {fcrdnsStats.valid} confirmadas, {fcrdnsStats.mismatch} desalineadas, {fcrdnsStats.noA} sin registro A.
+                  </span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="button small"
+                  style={{
+                    height: '24px',
+                    fontSize: '11px',
+                    padding: '0 8px',
+                    background: fcrdnsFilter === 'all' ? '#0f172a' : '#f1f5f9',
+                    color: fcrdnsFilter === 'all' ? '#fff' : '#475569',
+                    border: 'none',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => setFcrdnsFilter('all')}
+                >
+                  Todas ({fcrdnsStats.total})
+                </button>
+                {fcrdnsStats.mismatch > 0 && (
+                  <button
+                    type="button"
+                    className="button small"
+                    style={{
+                      height: '24px',
+                      fontSize: '11px',
+                      padding: '0 8px',
+                      background: fcrdnsFilter === 'mismatch' ? '#dc2626' : '#fef2f2',
+                      color: fcrdnsFilter === 'mismatch' ? '#fff' : '#dc2626',
+                      borderColor: '#fecaca',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    onClick={() => setFcrdnsFilter(fcrdnsFilter === 'mismatch' ? 'all' : 'mismatch')}
+                  >
+                    🔴 Desalineadas ({fcrdnsStats.mismatch})
+                  </button>
+                )}
+                {fcrdnsStats.noA > 0 && (
+                  <button
+                    type="button"
+                    className="button small"
+                    style={{
+                      height: '24px',
+                      fontSize: '11px',
+                      padding: '0 8px',
+                      background: fcrdnsFilter === 'no_a' ? '#d97706' : '#fffbeb',
+                      color: fcrdnsFilter === 'no_a' ? '#fff' : '#b45309',
+                      borderColor: '#fef3c7',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    onClick={() => setFcrdnsFilter(fcrdnsFilter === 'no_a' ? 'all' : 'no_a')}
+                  >
+                    🟡 Sin A ({fcrdnsStats.noA})
+                  </button>
+                )}
+                {fcrdnsStats.valid > 0 && (
+                  <button
+                    type="button"
+                    className="button small"
+                    style={{
+                      height: '24px',
+                      fontSize: '11px',
+                      padding: '0 8px',
+                      background: fcrdnsFilter === 'valid' ? '#16a34a' : '#f0fdf4',
+                      color: fcrdnsFilter === 'valid' ? '#fff' : '#15803d',
+                      borderColor: '#bbf7d0',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    onClick={() => setFcrdnsFilter(fcrdnsFilter === 'valid' ? 'all' : 'valid')}
+                  >
+                    🟢 Válidas ({fcrdnsStats.valid})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {loading ? (
             <div className="table-empty">Cargando direcciones IP…</div>
           ) : filteredIps.length === 0 ? (
@@ -1202,14 +1442,82 @@ export default function Networks({ workspaceId }: { workspaceId: string }) {
                         </span>
                       </td>
                         <td>
-                          {ip.purpose ? (
-                            <span className="rdns-tag">
-                              <Globe2 size={11} />
-                              {ip.purpose}
-                            </span>
-                          ) : (
-                            <span className="rdns-tag empty">Sin reverse DNS</span>
-                          )}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              {ip.purpose ? (
+                                <span className="rdns-tag">
+                                  <Globe2 size={11} />
+                                  {ip.purpose}
+                                </span>
+                              ) : (
+                                <span className="rdns-tag empty">Sin reverse DNS</span>
+                              )}
+                              <button
+                                type="button"
+                                className="icon-button"
+                                style={{ width: '20px', height: '20px', padding: 0 }}
+                                title="Verificar consistencia FCrDNS de esta IP"
+                                onClick={() => handleVerifySingleIp(ip)}
+                                disabled={verifyingIp === ip.address}
+                              >
+                                <RefreshCw size={11} className={verifyingIp === ip.address ? 'spinner' : ''} />
+                              </button>
+                            </div>
+
+                            {/* FCrDNS Status Badge */}
+                            {fcrdnsResults[ip.address] && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+                                {fcrdnsResults[ip.address].status === 'valid' && (
+                                  <span
+                                    className="ip-badge"
+                                    style={{ background: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0', fontSize: '9px', gap: '3px' }}
+                                    title={fcrdnsResults[ip.address].detail}
+                                  >
+                                    <CheckCircle2 size={10} /> FCrDNS Válido
+                                  </span>
+                                )}
+                                {fcrdnsResults[ip.address].status === 'mismatch' && (
+                                  <span
+                                    className="ip-badge"
+                                    style={{ background: '#fef2f2', color: '#dc2626', borderColor: '#fecaca', fontSize: '9px', gap: '3px' }}
+                                    title={fcrdnsResults[ip.address].detail}
+                                  >
+                                    <AlertTriangle size={10} /> Mismatch
+                                  </span>
+                                )}
+                                {fcrdnsResults[ip.address].status === 'no_a_record' && (
+                                  <span
+                                    className="ip-badge"
+                                    style={{ background: '#fffbeb', color: '#b45309', borderColor: '#fef3c7', fontSize: '9px', gap: '3px' }}
+                                    title={fcrdnsResults[ip.address].detail}
+                                  >
+                                    <AlertCircle size={10} /> NXDOMAIN (Sin A)
+                                  </span>
+                                )}
+                                {fcrdnsResults[ip.address].status === 'no_ptr' && (
+                                  <span
+                                    className="ip-badge"
+                                    style={{ background: '#f8fafc', color: '#64748b', borderColor: '#e2e8f0', fontSize: '9px', gap: '3px' }}
+                                    title={fcrdnsResults[ip.address].detail}
+                                  >
+                                    Sin PTR
+                                  </span>
+                                )}
+                                {(fcrdnsResults[ip.address].status === 'mismatch' || fcrdnsResults[ip.address].status === 'no_a_record') && (
+                                  <button
+                                    type="button"
+                                    className="button small"
+                                    style={{ height: '20px', fontSize: '9px', padding: '0 6px', color: '#2563eb', borderColor: '#bfdbfe', background: '#eff6ff', cursor: 'pointer', fontWeight: 600 }}
+                                    title="Consultar y corregir PTR con el valor real de DoH"
+                                    onClick={() => handleFixPtr(ip)}
+                                    disabled={fixingIp === ip.id}
+                                  >
+                                    {fixingIp === ip.id ? 'Corrigiendo…' : 'Corregir PTR'}
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td>
                           {ip.physical_server ? (
